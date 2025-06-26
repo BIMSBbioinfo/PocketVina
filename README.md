@@ -1,4 +1,4 @@
-<h1 align="center">PocketVina-GPU</h1>
+<h1 align="center">PocketVina</h1>
 
 <p align="center">
   <a href="https://www.arxiv.org/abs/2506.20043"><img src="https://img.shields.io/badge/arXiv-preprint-B31B1B?style-for-the-badge&logo=arXiv"/></a>
