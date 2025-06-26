@@ -34,7 +34,7 @@
 ```bash
 # Clone the repository and enter
 git clone https://github.com/BIMSBbioinfo/PocketVina
-cd PocketVina-GPU
+cd PocketVina
 
 # Create & activate Conda env
 conda create --name pocketvina python=3.9 -c conda-forge -y
