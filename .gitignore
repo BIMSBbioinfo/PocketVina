@@ -1,0 +1,53 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+dist/
+build/
+*.egg-info/
+__pycache__/
+*.pyc
+
+test/
+boost_1_77_0/
+boost_1_77_0.tar.gz
+p2rank_2.5/
+p2rank_2.5.tar.gz
+clinfo/
+OpenCL-Headers/
+.vscode/
+scripts_test/
+fastapi/
+*.sif
+*.def
+results/
+bin/

@@ -1,0 +1,11 @@
+include LICENSE
+include README.md
+include pyproject.toml
+include pocketvina/Makefile
+include pocketvina/PocketVina-GPU
+recursive-include pocketvina/lib *
+recursive-include pocketvina/OpenCL *
+recursive-include pocketvina/QuickVina2-GPU-2-1 *
+recursive-include pocketvina/main *
+recursive-include pocketvina/boost_1_77_0 *
+recursive-include pocketvina/p2rank_2.5 *
