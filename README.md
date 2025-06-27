@@ -91,8 +91,8 @@ pocketvina.execute_docking()
 
 1. `protein_files.txt`: List of protein PDB file paths (one per line)
 ```bash
-/path/to/protein1.pdb      #GIVE ABSOLUTE PATH
-/path/to/protein2.pdb      #GIVE ABSOLUTE PATH
+/path/to/protein1.pdb
+path/to/protein2.pdb        # You can also use relative path
 ```
 
 2. `ligands.txt`: List of SMILES strings (one per line)

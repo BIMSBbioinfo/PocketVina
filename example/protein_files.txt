@@ -1,2 +1,2 @@
-Path/to/PocketVina-GPU/example/proteins/2W83.pdb
-Path/to/PocketVina-GPU/example/proteins/1fbl.pdb
+proteins/2W83.pdb
+proteins/1fbl.pdb

@@ -45,6 +45,7 @@ p2rank_2.5.tar.gz
 clinfo/
 OpenCL-Headers/
 .vscode/
+.idea/
 scripts_test/
 fastapi/
 *.sif

@@ -78,6 +78,7 @@ class PocketVinaConfig:
             self.output_dir = "output"
         if self.batch_size is None:
             self.batch_size = 10
+        self.output_dir = os.path.abspath(self.output_dir)
 
 
 class P2RankProcessor:
@@ -197,7 +198,8 @@ class P2RankProcessor:
         """Process multiple PDB files from a list"""
         self.logger.info(f"Processing file list from: {file_list_path}")
         results = {}
-        
+
+        file_list_parent = os.path.dirname(os.path.abspath(file_list_path))
         try:
             # Read file paths
             with open(file_list_path, 'r') as f:
@@ -205,6 +207,8 @@ class P2RankProcessor:
             
             # Process each file
             for pdb_file in pdb_files:
+                if os.path.abspath(pdb_file) != pdb_file:
+                    pdb_file = os.path.abspath(os.path.relpath(os.path.join(file_list_parent, pdb_file), '.'))
                 base_name = os.path.splitext(os.path.basename(pdb_file))[0]
                 pdbqt_file = os.path.join(self.structures_dir, f"{base_name}.pdbqt")
                 pockets_csv = os.path.join(self.pockets_dir, f"{base_name}.csv")
@@ -566,8 +570,8 @@ class PocketVinaGPU:
             )
 
             with open(config_file, 'w') as file:
-                file.write(f"receptor = {protein_file}\n")
-                file.write(f"ligand_directory = {ligand_directory}\n")
+                file.write(f"receptor = {os.path.abspath(protein_file)}\n")
+                file.write(f"ligand_directory = {os.path.abspath(ligand_directory)}\n")
                 file.write(f"opencl_binary_path = {self.opencl_binary_path}\n")
                 file.write(f"center_x = {pocket['center_x']}\n")
                 file.write(f"center_y = {pocket['center_y']}\n")
@@ -690,7 +694,7 @@ class PocketVinaGPU:
                     binary_path = os.path.join(package_dir, 'PocketVina-GPU')
                     
                     # Run the command from the package directory with OpenCL path
-                    subprocess.run([binary_path, '--config', config_file], 
+                    subprocess.run([binary_path, '--config', config_file],
                                 check=True, env=env, cwd=package_dir)
                 except Exception as e:
                     self.logger.error(f"Error in docking: {e}")
