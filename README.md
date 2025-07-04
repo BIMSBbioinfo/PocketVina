@@ -67,19 +67,26 @@ export LD_LIBRARY_PATH=$CONDA_PREFIX/lib/:$LD_LIBRARY_PATH
 ```
 
 ```python
-from pocketvina import PocketVinaGPU, PocketVinaConfig, P2RankConfig
+from pocketvina import PocketVinaGPU, PocketVinaConfig, P2RankConfig, PocketConfig
 
 # For using direct protein paths with P2Rank
 config = PocketVinaConfig(
-    protein_paths="example/protein_files.txt",
-    smiles_file="example/ligands.txt",  
-    output_dir="results",
+    protein_paths="example/protein_files.txt", ## ABSOLUTE PATH
+    smiles_file="example/ligands.txt", ## ABSOLUTE PATH
+    output_dir="results", ## ABSOLUTE PATH
     batch_size=10,
     p2rank_config=P2RankConfig(         
-        threads=4,
+        threads=8,
         visualizations=False,
         vis_copy_proteins=False,
-        output_dir="results"
+        output_dir="results", ## ABSOLUTE PATH
+        model='alphafold'
+    ),
+    pocket_config=PocketConfig(
+            size_x=20,
+            size_y=20,
+            size_z=20,
+            thread=1000
     )
 )
 
