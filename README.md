@@ -256,11 +256,11 @@ MIT License
 
 For issues, please visit:
 
-https://github.com/BIMSBbioinfo/PocketVina/issues⁠
+[https://github.com/BIMSBbioinfo/PocketVina/issues⁠](https://github.com/BIMSBbioinfo/PocketVina/issues⁠)
 
 For discussions and questions, please visit:
 
-https://github.com/BIMSBbioinfo/PocketVina/discussions⁠
+[https://github.com/BIMSBbioinfo/PocketVina/discussions⁠](https://github.com/BIMSBbioinfo/PocketVina/discussions⁠)
 
 ## Acknowledgements
 
