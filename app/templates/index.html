@@ -1,0 +1,1539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PocketVina: GPU-accelerated protein-ligand docking with automated pocket detection, exploring through multi-pocket conditioning.</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script type="text/javascript" src="https://www.ebi.ac.uk/pdbe/pdb-component-library/js/pdbe-molstar-light-3.1.0.js"></script>
+    <link rel="stylesheet" type="text/css" href="https://www.ebi.ac.uk/pdbe/pdb-component-library/css/pdbe-molstar-light-3.1.0.css">
+    <style>
+        .drag-drop-area {
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.3s;
+        }
+        .drag-drop-area:hover {
+            border-color: #007bff;
+        }
+        .protein-list {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 10px;
+            background-color: #f8f9fa;
+        }
+        #results-section {
+            display: none;
+        }
+        .loading {
+            display: none;
+        }
+        .spinner-border {
+            width: 2rem;
+            height: 2rem;
+        }
+        .sortable-header {
+            cursor: pointer;
+            user-select: none;
+            transition: background-color 0.2s;
+        }
+        .sortable-header:hover {
+            background-color: rgba(255, 255, 255, 0.1) !important;
+        }
+        .sort-icon {
+            font-size: 0.9em;
+            opacity: 0.7;
+            transition: all 0.2s;
+        }
+        .sort-icon.fa-sort-up,
+        .sort-icon.fa-sort-down {
+            opacity: 1;
+            color: #ffc107;
+        }
+        .table-responsive {
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        #results-table th {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .viewer-3d {
+            width: 100%;
+            height: 500px;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            background: #f8f9fa;
+            position: relative;
+        }
+        .viewer-3d canvas {
+            border-radius: 8px;
+        }
+        .view-3d-btn {
+            padding: 2px 8px;
+            font-size: 0.75em;
+            margin-left: 5px;
+        }
+        .btn-group .view-3d-btn {
+            margin-left: 0;
+            border-radius: 0;
+        }
+        .btn-group .view-3d-btn:first-child {
+            border-top-left-radius: 0.25rem;
+            border-bottom-left-radius: 0.25rem;
+        }
+        .btn-group .view-3d-btn:last-child {
+            border-top-right-radius: 0.25rem;
+            border-bottom-right-radius: 0.25rem;
+        }
+        .protein-item {
+            transition: all 0.2s;
+        }
+        .protein-item:hover {
+            transform: translateX(5px);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .modal-xl {
+            max-width: 90vw;
+        }
+        .viewer-controls {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+        }
+        /* In-page Mol* overlay */
+        .molstar-overlay { position: fixed; inset: 0; background: rgba(2,6,23,.75); z-index: 2000; display: none; backdrop-filter: blur(1px); }
+        .molstar-wrap { position: absolute; top: 6vh; left: 50%; transform: translateX(-50%); width: min(1100px, 92vw); height: min(80vh, 88vh); background: #0f172a; border: 1px solid #1f2937; border-radius: 14px; overflow: visible; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
+        .molstar-toolbar { position: absolute; top: -44px; right: 0; z-index: 100; }
+        .molstar-toolbar .btn { padding: 6px 12px; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
+        .molstar-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #0f172a; }
+    </style>
+</head>
+<body>
+    <div class="container my-5">
+        <h1 class="text-center mb-4">🧬 PocketVina UI 💊</h1>
+        <div class="text-center mb-3">
+            <a class="btn btn-outline-dark me-2" href="https://arxiv.org/abs/2506.20043" target="_blank" rel="noopener noreferrer">
+                <i class="fas fa-file-alt me-1"></i> arXiv Paper
+            </a>
+            <a class="btn btn-outline-dark" href="https://github.com/BIMSBbioinfo/PocketVina" target="_blank" rel="noopener noreferrer">
+                <i class="fab fa-github me-1"></i> GitHub Repository
+            </a>
+        </div>
+        <p class="text-center text-muted mb-5">Upload protein files (PDB format) and ligands file to perform GPU-accelerated protein-ligand docking.</p>
+        
+        
+        
+        <div class="row">
+            <!-- Input Files Column -->
+            <div class="col-md-6">
+                <div class="card h-100">
+                    <div class="card-header">
+                        <h5>📁 Input Files</h5>
+                    </div>
+                    <div class="card-body">
+                                                 <!-- Protein Files Section -->
+                         <h6>Protein Files (PDB format)</h6>
+                         <div class="drag-drop-area mb-3" id="drop-area" onclick="document.getElementById('protein-file').click()">
+                             <i class="fas fa-cloud-upload-alt fa-2x mb-2 text-primary"></i>
+                             <p><strong>Click to select</strong> or drag & drop protein files</p>
+                             <small class="text-muted">Supported format: .pdb</small>
+                             <input type="file" id="protein-file" accept=".pdb" style="display: none;">
+                         </div>
+                        
+                        <div class="d-flex gap-2 mb-3">
+                            <button class="btn btn-outline-primary" onclick="addProtein()">Add Protein</button>
+                            <button class="btn btn-outline-secondary" onclick="clearProteins()">Clear All</button>
+                        </div>
+                        
+                        <div class="protein-list mb-4" id="protein-list">
+                            <em class="text-muted">No proteins uploaded yet...</em>
+                        </div>
+                        
+                                                 <!-- Ligands File Section -->
+                         <h6>Ligands File (CSV format)</h6>
+                         <div class="mb-3">
+                             <input type="file" id="ligands-file" accept=".csv,.txt" class="form-control">
+                             <div class="form-text">
+                                 <i class="fas fa-info-circle text-info me-1"></i>
+                                 Select a CSV file containing ligand molecules
+                             </div>
+                         </div>
+                         
+                         <div class="alert alert-info">
+                             <strong><i class="fas fa-lightbulb me-1"></i>Example format:</strong><br>
+                             <code>molecule_name,smiles<br>
+                             molecule1,CC1=CC=C(C=C1)C(=O)CCCN1CCC(O)(CC1)c1ccc(Cl)cc1<br>
+                             molecule2,CC(C)(C)NCC(O)c1ccc(O)c(CO)c1</code>
+                         </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Parameters Column -->
+            <div class="col-md-6">
+                <div class="card h-100">
+                    <div class="card-header">
+                        <h5>⚙️ Parameters</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label for="batch-size" class="form-label">Batch Size</label>
+                                <input type="range" class="form-range" id="batch-size" min="10" max="100" value="50" oninput="updateValue('batch-size', 'batch-size-value')">
+                                <div class="text-center"><small id="batch-size-value">10</small></div>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="threads" class="form-label">P2Rank Threads</label>
+                                <input type="range" class="form-range" id="threads" min="1" max="32" value="8" oninput="updateValue('threads', 'threads-value')">
+                                <div class="text-center"><small id="threads-value">8</small></div>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="model-type" class="form-label">P2Rank Model</label>
+                            <select class="form-select" id="model-type">
+                                <option value="alphafold">alphafold</option>
+                                <option value="default">default</option>
+                                <option value="alphafold_conservation">alphafold_conservation</option>
+                                <option value="alphafold_conservation_hmm">alphafold_conservation_hmm</option>
+                            </select>
+                        </div>
+                        
+                        <h6>Pocket Configuration</h6>
+                        <div class="row mb-3">
+                            <div class="col-md-4">
+                                <label for="size-x" class="form-label">Size X</label>
+                                <input type="range" class="form-range" id="size-x" min="10" max="30" value="20" oninput="updateValue('size-x', 'size-x-value')">
+                                <div class="text-center"><small id="size-x-value">20</small></div>
+                            </div>
+                            <div class="col-md-4">
+                                <label for="size-y" class="form-label">Size Y</label>
+                                <input type="range" class="form-range" id="size-y" min="10" max="30" value="20" oninput="updateValue('size-y', 'size-y-value')">
+                                <div class="text-center"><small id="size-y-value">20</small></div>
+                            </div>
+                            <div class="col-md-4">
+                                <label for="size-z" class="form-label">Size Z</label>
+                                <input type="range" class="form-range" id="size-z" min="10" max="30" value="20" oninput="updateValue('size-z', 'size-z-value')">
+                                <div class="text-center"><small id="size-z-value">20</small></div>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="thread-pocket" class="form-label">Processing Threads</label>
+                            <input type="range" class="form-range" id="thread-pocket" min="100" max="5000" value="1000" step="100" oninput="updateValue('thread-pocket', 'thread-pocket-value')">
+                            <div class="text-center"><small id="thread-pocket-value">1000</small></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Run Button -->
+        <div class="text-center my-4">
+            <button class="btn btn-primary btn-lg" onclick="runDocking()">
+                <span class="loading spinner-border spinner-border-sm me-2" role="status"></span>
+                🚀 Run Docking
+            </button>
+        </div>
+        
+        <!-- Status -->
+        <div id="status-section">
+            <div class="alert alert-info" id="status" style="display: none;"></div>
+        </div>
+        
+        <!-- Results Section -->
+        <div id="results-section">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5>📊 Docking Results</h5>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-outline-primary" id="download-all-btn" onclick="downloadAllResults()">Download All Pose Results</button>
+                        <button class="btn btn-success" id="download-best-btn" onclick="downloadBestResults()">Download Best Pose Results</button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div id="results-table" class="table-responsive"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- In-page Mol* overlay -->
+        <div id="molstarOverlay" class="molstar-overlay">
+            <div class="molstar-wrap">
+                <div class="molstar-toolbar">
+                    <button class="btn btn-secondary btn-sm" onclick="closeMolstarOverlay()">Close</button>
+                </div>
+                <iframe id="molstarFrame" class="molstar-frame" src=""></iframe>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3D Viewer Modal -->
+    <div class="modal fade" id="viewer3DModal" tabindex="-1" aria-labelledby="viewer3DModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="viewer3DModalLabel">
+                        <i class="fas fa-cube text-primary me-2"></i>
+                        3D Molecular Viewer
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="viewer-controls">
+                        <div class="row">
+                            <div class="col-md-8">
+                                <h6 id="current-molecule-name">Loading molecule...</h6>
+                                <p class="text-muted mb-0" id="current-molecule-info">Preparing 3D visualization...</p>
+                            </div>
+                            <div class="col-md-4 text-end">
+                                <div class="btn-group" role="group">
+                                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="resetView()" title="Reset View">
+                                        <i class="fas fa-home"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="toggleSpin()" title="Toggle Spin" id="spin-btn">
+                                        <i class="fas fa-sync"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="changeStyle()" title="Change Style" id="style-btn">
+                                        <i class="fas fa-palette"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="viewer3d" class="viewer-3d"></div>
+                                         <div class="mt-3">
+                        <small class="text-muted">
+                            <i class="fas fa-info-circle me-1"></i>
+                            <strong>Controls:</strong> Left click + drag to rotate | Scroll to zoom | Right click + drag to pan
+                            <span id="complex-info" style="display: none;">
+                                <br><i class="fas fa-palette me-1"></i>
+                                <strong>Complex View:</strong> <span class="text-primary">Cyan protein</span> + <span class="text-success">Colored ligand</span>
+                            </span>
+                        </small>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" onclick="downloadPDB()">
+                        <i class="fas fa-download me-1"></i>Download PDB
+                    </button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let uploadedProteins = [];
+        let proteinInfo = [];  // Store full protein info for 3D viewer
+        let currentResultsPathAll = '';
+        let currentResultsPathBest = '';
+
+        // Initialize drag & drop functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const dropArea = document.getElementById('drop-area');
+            const fileInput = document.getElementById('protein-file');
+
+            // Prevent default drag behaviors
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                dropArea.addEventListener(eventName, preventDefaults, false);
+                document.body.addEventListener(eventName, preventDefaults, false);
+            });
+
+            // Highlight drop area when item is dragged over it
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropArea.addEventListener(eventName, highlight, false);
+            });
+
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropArea.addEventListener(eventName, unhighlight, false);
+            });
+
+            // Handle dropped files
+            dropArea.addEventListener('drop', handleDrop, false);
+
+            function preventDefaults(e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+
+            function highlight(e) {
+                dropArea.style.backgroundColor = '#e3f2fd';
+                dropArea.style.borderColor = '#2196f3';
+            }
+
+            function unhighlight(e) {
+                dropArea.style.backgroundColor = '';
+                dropArea.style.borderColor = '#ccc';
+            }
+
+            function handleDrop(e) {
+                const dt = e.dataTransfer;
+                const files = dt.files;
+
+                if (files.length > 0) {
+                    fileInput.files = files;
+                    addProtein();
+                }
+            }
+        });
+
+        function updateValue(sliderId, displayId) {
+            const slider = document.getElementById(sliderId);
+            const display = document.getElementById(displayId);
+            display.textContent = slider.value;
+        }
+
+        function showStatus(message, type = 'info') {
+            const status = document.getElementById('status');
+            status.className = `alert alert-${type}`;
+            status.textContent = message;
+            status.style.display = 'block';
+        }
+
+        function hideStatus() {
+            document.getElementById('status').style.display = 'none';
+        }
+
+                 function addProtein() {
+             const fileInput = document.getElementById('protein-file');
+             const file = fileInput.files[0];
+             
+             console.log('addProtein called, file:', file); // Debug log
+             
+             if (!file) {
+                 showStatus('Please select a protein file', 'warning');
+                 return;
+             }
+
+             // Validate file type
+             if (!file.name.toLowerCase().endsWith('.pdb')) {
+                 showStatus('Please select a valid PDB file', 'warning');
+                 return;
+             }
+
+             // Show loading state
+             const addButton = document.querySelector('button[onclick="addProtein()"]');
+             const originalText = addButton.textContent;
+             addButton.textContent = 'Adding...';
+             addButton.disabled = true;
+
+             const formData = new FormData();
+             formData.append('protein_file', file);
+
+             console.log('Sending file to server:', file.name); // Debug log
+
+             fetch('/add_protein', {
+                 method: 'POST',
+                 body: formData
+             })
+             .then(response => {
+                 console.log('Server response status:', response.status); // Debug log
+                 return response.json();
+             })
+             .then(data => {
+                 console.log('Server response data:', data); // Debug log
+                 
+                 // Reset button state
+                 addButton.textContent = originalText;
+                 addButton.disabled = false;
+                 
+                 if (data.success) {
+                     uploadedProteins = data.proteins;
+                     proteinInfo = data.protein_info || [];  // Store full protein info
+                     updateProteinList();
+                     showStatus(data.message, 'success');
+                     fileInput.value = ''; // Clear file input
+                 } else {
+                     showStatus(data.error, 'danger');
+                 }
+             })
+             .catch(error => {
+                 console.error('Error:', error); // Debug log
+                 
+                 // Reset button state
+                 addButton.textContent = originalText;
+                 addButton.disabled = false;
+                 
+                 showStatus('Error adding protein: ' + error, 'danger');
+             });
+         }
+
+        function clearProteins() {
+            fetch('/clear_proteins', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    uploadedProteins = [];
+                    proteinInfo = [];  // Clear protein info too
+                    updateProteinList();
+                    showStatus(data.message, 'success');
+                    document.getElementById('results-section').style.display = 'none';
+                } else {
+                    showStatus('Error clearing proteins', 'danger');
+                }
+            });
+        }
+
+                 function updateProteinList() {
+             const listElement = document.getElementById('protein-list');
+             if (uploadedProteins.length === 0) {
+                 listElement.innerHTML = '<em class="text-muted">No proteins uploaded yet...</em>';
+             } else {
+                                   listElement.innerHTML = uploadedProteins.map((protein, index) => {
+                      // Get the actual filename for 3D viewer
+                      const actualFilename = proteinInfo[index] ? proteinInfo[index].filename : protein;
+                      console.log(`Protein ${index}: display="${protein}", actual="${actualFilename}"`);
+                     
+                     return `<div class="protein-item d-flex align-items-center justify-content-between mb-2 p-2 bg-light rounded">
+                         <div class="d-flex align-items-center">
+                             <i class="fas fa-dna text-success me-2"></i>
+                             <span class="fw-bold">${protein}</span>
+                         </div>
+                         <div class="d-flex align-items-center">
+                             <button class="btn btn-outline-primary view-3d-btn" onclick="view3D('${actualFilename}', 'protein')" title="View in 3D">
+                                 <i class="fas fa-cube"></i> 3D
+                             </button>
+                             <small class="text-muted ms-2">#${index + 1}</small>
+                         </div>
+                     </div>`;
+                 }).join('');
+             }
+         }
+
+        function runDocking() {
+            const ligandsFile = document.getElementById('ligands-file').files[0];
+            
+            if (!ligandsFile) {
+                showStatus('Please select a ligands file', 'warning');
+                return;
+            }
+            
+            if (uploadedProteins.length === 0) {
+                showStatus('Please upload at least one protein file', 'warning');
+                return;
+            }
+
+            // Show loading
+            const button = document.querySelector('.btn-primary');
+            const loading = button.querySelector('.loading');
+            loading.style.display = 'inline-block';
+            button.disabled = true;
+
+            const formData = new FormData();
+            formData.append('ligands_file', ligandsFile);
+            formData.append('batch_size', document.getElementById('batch-size').value);
+            formData.append('threads', document.getElementById('threads').value);
+            formData.append('size_x', document.getElementById('size-x').value);
+            formData.append('size_y', document.getElementById('size-y').value);
+            formData.append('size_z', document.getElementById('size-z').value);
+            formData.append('thread_pocket', document.getElementById('thread-pocket').value);
+            formData.append('model_type', document.getElementById('model-type').value);
+
+            showStatus('Starting docking process...', 'info');
+
+            fetch('/run_docking', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Hide loading
+                loading.style.display = 'none';
+                button.disabled = false;
+
+                if (data.success) {
+                    showStatus(data.message, 'success');
+                    document.getElementById('results-table').innerHTML = data.results_html; // show BEST table
+                    document.getElementById('results-section').style.display = 'block';
+                    currentResultsPathAll = data.results_path_all;
+                    currentResultsPathBest = data.results_path_best;
+                } else {
+                    showStatus(data.error, 'danger');
+                }
+            })
+            .catch(error => {
+                loading.style.display = 'none';
+                button.disabled = false;
+                showStatus('Error running docking: ' + error, 'danger');
+            });
+        }
+
+        function downloadAllResults() {
+            if (currentResultsPathAll) {
+                window.open(`/download_results?path=${encodeURIComponent(currentResultsPathAll)}&name=${encodeURIComponent('all_pose_results.csv')}`);
+            }
+        }
+
+        function downloadBestResults() {
+            if (currentResultsPathBest) {
+                window.open(`/download_results?path=${encodeURIComponent(currentResultsPathBest)}&name=${encodeURIComponent('best_pose_results.csv')}`);
+            }
+        }
+
+        // Table sorting functionality
+        let sortState = {}; // Track sort direction for each column
+
+        function sortTable(columnIndex) {
+            const table = document.getElementById('results-table');
+            const tbody = table.getElementsByTagName('tbody')[0];
+            const rows = Array.from(tbody.getElementsByTagName('tr'));
+            
+            // Determine sort direction
+            const currentDirection = sortState[columnIndex] || 'none';
+            let newDirection;
+            if (currentDirection === 'none' || currentDirection === 'desc') {
+                newDirection = 'asc';
+            } else {
+                newDirection = 'desc';
+            }
+            
+            // Update sort state
+            sortState = {}; // Reset all other columns
+            sortState[columnIndex] = newDirection;
+            
+            // Update sort icons
+            updateSortIcons(columnIndex, newDirection);
+            
+            // Sort rows
+            rows.sort((rowA, rowB) => {
+                const cellA = rowA.getElementsByTagName('td')[columnIndex];
+                const cellB = rowB.getElementsByTagName('td')[columnIndex];
+                
+                if (!cellA || !cellB) return 0;
+                
+                let valueA = cellA.textContent.trim();
+                let valueB = cellB.textContent.trim();
+                
+                // Try to parse as numbers
+                const numA = parseFloat(valueA);
+                const numB = parseFloat(valueB);
+                
+                let comparison;
+                if (!isNaN(numA) && !isNaN(numB)) {
+                    // Numeric comparison
+                    comparison = numA - numB;
+                } else {
+                    // String comparison
+                    comparison = valueA.localeCompare(valueB, undefined, {
+                        numeric: true,
+                        sensitivity: 'base'
+                    });
+                }
+                
+                return newDirection === 'asc' ? comparison : -comparison;
+            });
+            
+            // Re-append sorted rows
+            rows.forEach(row => tbody.appendChild(row));
+            
+            // Add visual feedback
+            highlightSortedColumn(columnIndex);
+        }
+        
+        function updateSortIcons(activeColumn, direction) {
+            // Reset all icons
+            const allIcons = document.querySelectorAll('.sort-icon');
+            allIcons.forEach((icon, index) => {
+                icon.className = 'fas fa-sort sort-icon';
+            });
+            
+            // Update active column icon
+            const activeIcon = document.getElementById(`sort-icon-${activeColumn}`);
+            if (activeIcon) {
+                if (direction === 'asc') {
+                    activeIcon.className = 'fas fa-sort-up sort-icon';
+                } else if (direction === 'desc') {
+                    activeIcon.className = 'fas fa-sort-down sort-icon';
+                }
+            }
+        }
+        
+        function highlightSortedColumn(columnIndex) {
+            // Remove previous highlights
+            const table = document.getElementById('results-table');
+            if (!table) return;
+            
+            const allCells = table.querySelectorAll('td, th');
+            allCells.forEach(cell => {
+                cell.style.backgroundColor = '';
+            });
+            
+            // Highlight sorted column
+            const rows = table.querySelectorAll('tr');
+            rows.forEach(row => {
+                const cells = row.querySelectorAll('td, th');
+                if (cells[columnIndex]) {
+                    cells[columnIndex].style.backgroundColor = 'rgba(255, 193, 7, 0.1)';
+                }
+                         });
+         }
+
+        // MolStar Molecular Viewer Functions
+        let molstarViewer = null;
+        let currentFileName = '';
+        let currentLigandPath = '';
+        let currentFileType = '';
+        let currentComplexMode = false;
+        let currentScript = '';
+        let currentScriptType = 'chimerax'; // 'chimerax' or 'pymol'
+        let isSpinning = false;
+        let currentStyle = 0;
+        const styles = ['cartoon', 'ball-and-stick', 'spacefill', 'wireframe'];
+        let animationHandle = null;
+
+        function openMolstarOverlay(url) {
+            const overlay = document.getElementById('molstarOverlay');
+            const frame = document.getElementById('molstarFrame');
+            frame.src = url;
+            overlay.style.display = 'block';
+        }
+
+        // Inline Mol* viewer within the results table
+        function toggleInlineViewer(rowId, frameId, proteinRoute, ligandRoute) {
+            const tr = document.getElementById(rowId);
+            const iframe = document.getElementById(frameId);
+            const origin = window.location.origin;
+            if (!tr || !iframe) return;
+            if (tr.style.display === 'none' || tr.style.display === '') {
+                // open
+                const p = encodeURIComponent(origin + proteinRoute);
+                const l = encodeURIComponent(origin + ligandRoute);
+                iframe.src = origin + `/molstar_preview?protein-url=${p}&ligand-url=${l}`;
+                tr.style.display = '';
+            } else {
+                // close
+                iframe.src = '';
+                tr.style.display = 'none';
+            }
+        }
+
+        function closeMolstarOverlay() {
+            const overlay = document.getElementById('molstarOverlay');
+            const frame = document.getElementById('molstarFrame');
+            frame.src = '';
+            overlay.style.display = 'none';
+        }
+
+        function view3D(filename, fileType) {
+            const origin = window.location.origin;
+            if (fileType === 'protein') {
+                const s = encodeURIComponent(origin + `/view_protein/${filename}`);
+                openMolstarOverlay(origin + `/molstar_preview?structure-url=${s}&structure-url-format=pdb&structure-url-is-binary=0`);
+            } else {
+                const s = encodeURIComponent(origin + `/view_result_file?path=${encodeURIComponent(filename)}`);
+                openMolstarOverlay(origin + `/molstar_preview?structure-url=${s}&structure-url-format=pdb&structure-url-is-binary=0`);
+            }
+        }
+
+        function viewComplex(proteinFilename, ligandPath) {
+            const origin = window.location.origin;
+            const p = encodeURIComponent(origin + `/view_protein/${proteinFilename}`);
+            const l = encodeURIComponent(origin + `/view_result_file?path=${encodeURIComponent(ligandPath)}`);
+            openMolstarOverlay(origin + `/molstar_preview?protein-url=${p}&ligand-url=${l}`);
+        }
+
+        function viewProcessedProtein(processedPdbPath, chimeraxScript, pymolScript) {
+            const origin = window.location.origin;
+            const s = encodeURIComponent(origin + `/view_processed_file?path=${encodeURIComponent(processedPdbPath)}`);
+            openMolstarOverlay(origin + `/molstar_preview?structure-url=${s}&structure-url-format=pdb&structure-url-is-binary=0`);
+        }
+
+        function viewProcessedComplex(processedProteinPath, ligandPath) {
+            const origin = window.location.origin;
+            const p = encodeURIComponent(origin + `/view_processed_file?path=${encodeURIComponent(processedProteinPath)}`);
+            const l = encodeURIComponent(origin + `/view_result_file?path=${encodeURIComponent(ligandPath)}`);
+            openMolstarOverlay(origin + `/molstar_preview?protein-url=${p}&ligand-url=${l}`);
+        }
+
+        function viewProcessedComplexWithScript(processedProteinPath, ligandPath, chimeraxScript, pymolScript) {
+            const origin = window.location.origin;
+            const p = encodeURIComponent(origin + `/view_processed_file?path=${encodeURIComponent(processedProteinPath)}`);
+            const l = encodeURIComponent(origin + `/view_result_file?path=${encodeURIComponent(ligandPath)}`);
+            openMolstarOverlay(origin + `/molstar_preview?protein-url=${p}&ligand-url=${l}`);
+        }
+
+        function viewOriginalProtein(filename) {
+            currentFileName = filename;
+            currentFileType = 'protein';
+            currentComplexMode = false;
+            
+            // Update modal title
+            document.getElementById('current-molecule-name').textContent = filename;
+            document.getElementById('current-molecule-info').textContent = `Loading original protein structure...`;
+            
+            // Hide complex info
+            document.getElementById('complex-info').style.display = 'none';
+            
+            // Show modal
+            const modal = new bootstrap.Modal(document.getElementById('viewer3DModal'));
+            modal.show();
+            
+            // Initialize viewer after modal is shown
+            setTimeout(() => {
+                init3DViewer();
+            }, 300);
+        }
+
+        function viewScript(scriptType, scriptPath) {
+            if (!scriptPath) {
+                alert('No script file available');
+                return;
+            }
+            
+            fetch(`/view_script?path=${encodeURIComponent(scriptPath)}&type=${scriptType}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        // Show script in a new modal or alert
+                        const scriptContent = data.content;
+                        const scriptWindow = window.open('', '_blank', 'width=800,height=600');
+                        scriptWindow.document.write(`
+                            <html>
+                                <head><title>${scriptType.toUpperCase()} Script</title></head>
+                                <body>
+                                    <h3>${scriptType.toUpperCase()} Script Content</h3>
+                                    <p><strong>Path:</strong> ${data.path}</p>
+                                    <pre style="background: #f5f5f5; padding: 10px; overflow: auto;">${scriptContent}</pre>
+                                </body>
+                            </html>
+                        `);
+                    } else {
+                        alert('Error loading script: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    alert('Error: ' + error);
+                });
+        }
+
+        async function init3DViewer() {
+            try {
+                // Clear previous viewer
+                const element3d = document.getElementById('viewer3d');
+                element3d.innerHTML = '';
+                
+                // Check if PDBeMolstarPlugin is available
+                if (!window.PDBeMolstarPlugin) {
+                    throw new Error('MolStar library not loaded - please check connection');
+                }
+                
+                console.log('🎯 Initializing MolStar viewer...');
+                
+                // Create MolStar viewer options
+                const viewerOptions = {
+                    customData: {
+                        url: '',
+                        format: 'pdb',
+                        binary: false
+                    },
+                    alphafoldView: false,
+                    bgColor: { r: 255, g: 255, b: 255 },
+                    hideControls: true,
+                    hideCanvasControls: ['selection', 'animation', 'controlToggle'],
+                    sequencePanel: false,
+                    pdbeUrl: '',
+                    loadMaps: false,
+                    validation: false,
+                    domain: false,
+                    symmetry: false,
+                    assembly: false
+                };
+                
+                // Initialize the viewer
+                molstarViewer = new PDBeMolstarPlugin();
+                
+                if (currentComplexMode) {
+                    // Load protein-ligand complex
+                    await loadProteinLigandComplex();
+                } else {
+                    // Load single file
+                    await loadSingleFile();
+                }
+                
+                console.log('✅ MolStar viewer initialized successfully');
+                
+            } catch (error) {
+                console.error('❌ Error initializing MolStar viewer:', error);
+                showViewerError('Failed to initialize MolStar viewer', error.message);
+            }
+        }
+        
+        async function loadSingleFile() {
+            try {
+                let url;
+                if (currentFileType === 'protein') {
+                    url = `/view_protein/${currentFileName}`;
+                } else if (currentFileType === 'processed_protein') {
+                    url = `/view_processed_file?path=${encodeURIComponent(currentFileName)}`;
+                } else {
+                    url = `/view_result_file?path=${encodeURIComponent(currentFileName)}`;
+                }
+                
+                console.log(`Loading single file: ${url}`);
+                
+                // Fetch the file data
+                const response = await fetch(url);
+                console.log(`Response status: ${response.status}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const pdbData = await response.text();
+                console.log(`File data loaded, length: ${pdbData.length}`);
+                
+                // Create a data URL for MolStar
+                const dataUrl = `data:text/plain;charset=utf-8,${encodeURIComponent(pdbData)}`;
+                
+                // MolStar viewer options
+                const viewerOptions = {
+                    customData: {
+                        url: dataUrl,
+                        format: 'pdb',
+                        binary: false
+                    },
+                    alphafoldView: false,
+                    bgColor: { r: 255, g: 255, b: 255 },
+                    hideControls: true,
+                    hideCanvasControls: ['selection', 'animation', 'controlToggle'],
+                    sequencePanel: false,
+                    pdbeUrl: '',
+                    loadMaps: false,
+                    validation: false,
+                    domain: false,
+                    symmetry: false,
+                    assembly: false
+                };
+                
+                // Render the viewer
+                await molstarViewer.render(document.getElementById('viewer3d'), viewerOptions);
+                console.log('✅ Structure loaded into MolStar');
+                
+                // Apply ChimeraX script if available for clean visualization
+                if (currentScript && currentFileType === 'processed_protein') {
+                    console.log(`🔵 Applying ChimeraX script for clean visualization: ${currentScript}`);
+                    await applyChimeraXScriptMolStar(currentScript);
+                } else {
+                    // Apply default styling based on file type
+                    if (currentFileType === 'ligand' || currentFileName.toLowerCase().includes('ligand') || currentFileName.toLowerCase().includes('pdbqt')) {
+                        console.log('🧪 Styling as ligand (single molecule view)');
+                        await applyLigandStyleMolStar();
+                    } else {
+                        console.log('🧬 Styling as protein (default visualization)');
+                        await applyProteinStyleMolStar();
+                    }
+                }
+                
+                // Update info
+                document.getElementById('current-molecule-info').textContent = 
+                    `${currentFileType.toUpperCase()} structure loaded`;
+                    
+            } catch (error) {
+                console.error('Error loading molecule:', error);
+                showViewerError(`Could not load ${currentFileName}`, error.message);
+            }
+        }
+
+        // MolStar helper functions for styling
+        async function applyLigandStyleMolStar() {
+            try {
+                console.log('🧪 Applying ligand style with MolStar');
+                
+                if (!molstarViewer || !molstarViewer.visual || !molstarViewer.visual.update) {
+                    console.warn('⚠️ MolStar visual API not available, using default rendering');
+                    return;
+                }
+                
+                // Apply ball and stick representation for ligands
+                await molstarViewer.visual.update({
+                    polymer: {
+                        type: 'ball-and-stick',
+                        color: 'element-symbol',
+                        opacity: 1.0
+                    },
+                    het: {
+                        type: 'ball-and-stick', 
+                        color: 'element-symbol',
+                        opacity: 1.0
+                    }
+                });
+                
+                console.log('✅ Ligand style applied successfully');
+            } catch (error) {
+                console.error('❌ Error applying ligand style:', error);
+            }
+        }
+        
+        async function applyProteinStyleMolStar() {
+            try {
+                console.log('🧬 Applying protein style with MolStar');
+                
+                if (!molstarViewer || !molstarViewer.visual || !molstarViewer.visual.update) {
+                    console.warn('⚠️ MolStar visual API not available, using default rendering');
+                    return;
+                }
+                
+                // Apply cartoon representation for proteins
+                await molstarViewer.visual.update({
+                    polymer: {
+                        type: 'cartoon',
+                        color: 'chain-id',
+                        opacity: 0.8
+                    },
+                    surface: {
+                        type: 'molecular-surface',
+                        color: 'uniform',
+                        colorValue: { r: 200, g: 200, b: 200 },
+                        opacity: 0.3
+                    }
+                });
+                
+                console.log('✅ Protein style applied successfully');
+            } catch (error) {
+                console.error('❌ Error applying protein style:', error);
+            }
+        }
+        
+        async function applyChimeraXScriptMolStar(scriptPath) {
+            try {
+                console.log(`🔵 Applying ChimeraX script with MolStar: ${scriptPath}`);
+                
+                // Fetch and parse ChimeraX script
+                const response = await fetch(`/view_script?path=${encodeURIComponent(scriptPath)}&type=chimerax`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    console.log('ChimeraX script content loaded');
+                    await parseAndApplyChimeraXCommandsMolStar(data.content);
+                } else {
+                    console.error('Error loading ChimeraX script:', data.error);
+                    // Fallback to default protein style
+                    await applyProteinStyleMolStar();
+                }
+            } catch (error) {
+                console.error('Error fetching ChimeraX script:', error);
+                // Fallback to default protein style
+                await applyProteinStyleMolStar();
+            }
+        }
+        
+        async function parseAndApplyChimeraXCommandsMolStar(scriptContent) {
+            try {
+                console.log('🎯 Parsing ChimeraX script for MolStar dynamic pocket visualization');
+                
+                const lines = scriptContent.split('\n');
+                let proteinColor = '#bdbdde';  // Default from CXC
+                let surfaceTransparency = 35; // Default from CXC
+                let pocketColors = {};  // Store defined colors
+                let pocketSelections = [];  // Store pocket selections
+                
+                // Parse ChimeraX commands
+                for (const line of lines) {
+                    const trimmedLine = line.trim();
+                    if (!trimmedLine || trimmedLine.startsWith('#')) continue;
+                    
+                    // Parse color definitions
+                    const colorNameMatch = trimmedLine.match(/color\s+name\s+(color_pocket\d+)\s+(#[0-9a-fA-F]{6})/i);
+                    if (colorNameMatch) {
+                        pocketColors[colorNameMatch[1]] = colorNameMatch[2];
+                        console.log(`🎨 Defined color: ${colorNameMatch[1]} = ${colorNameMatch[2]}`);
+                    }
+                    
+                    // Parse pocket atom selections
+                    const pocketNameMatch = trimmedLine.match(/name\s+(pocket\d+)_atoms\s+(.+)/i);
+                    if (pocketNameMatch) {
+                        const pocketName = pocketNameMatch[1];
+                        const atomsString = pocketNameMatch[2];
+                        
+                        const serialNumbers = [];
+                        const serialMatches = atomsString.matchAll(/@@serial_number=(\d+)/g);
+                        for (const match of serialMatches) {
+                            serialNumbers.push(match[1]);
+                        }
+                        
+                        pocketSelections.push({
+                            name: pocketName,
+                            atomSerials: serialNumbers,
+                            colorName: `color_${pocketName}`
+                        });
+                        
+                        console.log(`🔍 Found ${pocketName} with ${serialNumbers.length} atoms`);
+                    }
+                    
+                    // Parse color assignments
+                    const colorAssignMatch = trimmedLine.match(/color\s+(pocket\d+)_atoms\s+(color_pocket\d+)/i);
+                    if (colorAssignMatch) {
+                        const pocketName = colorAssignMatch[1];
+                        const colorName = colorAssignMatch[2];
+                        
+                        const pocket = pocketSelections.find(p => p.name === pocketName);
+                        if (pocket && pocketColors[colorName]) {
+                            pocket.color = pocketColors[colorName];
+                            console.log(`🎨 Assigned ${colorName} to ${pocketName}`);
+                        }
+                    }
+                    
+                    // Parse transparency
+                    const transparencyMatch = trimmedLine.match(/transparency\s+(\d+)/i);
+                    if (transparencyMatch) {
+                        surfaceTransparency = parseInt(transparencyMatch[1]);
+                    }
+                    
+                    // Parse protein color
+                    const proteinColorMatch = trimmedLine.match(/color\s+protein\s+(#[0-9a-fA-F]{6})/i);
+                    if (proteinColorMatch) {
+                        proteinColor = proteinColorMatch[1];
+                    }
+                }
+                
+                // Apply MolStar visualization
+                if (!molstarViewer || !molstarViewer.visual || !molstarViewer.visual.update) {
+                    console.warn('⚠️ MolStar visual API not available for advanced styling');
+                    return;
+                }
+                
+                // Convert hex color to RGB
+                const proteinRgb = hexToRgb(proteinColor);
+                const baseOpacity = (100 - surfaceTransparency) / 100 * 0.3;
+                
+                // Apply base visualization with parsed colors
+                await molstarViewer.visual.update({
+                    polymer: {
+                        type: 'cartoon',
+                        color: 'uniform',
+                        colorValue: proteinRgb,
+                        opacity: 0.8
+                    },
+                    surface: {
+                        type: 'molecular-surface',
+                        color: 'uniform',
+                        colorValue: proteinRgb,
+                        opacity: baseOpacity
+                    }
+                });
+                
+                // Apply colored pocket surfaces (simplified for MolStar API limitations)
+                console.log(`🎉 MolStar ChimeraX visualization completed: ${pocketSelections.length} pockets`);
+                
+            } catch (error) {
+                console.error('❌ Error parsing ChimeraX script for MolStar:', error);
+                // Fallback to default protein style
+                await applyProteinStyleMolStar();
+            }
+        }
+        
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? {
+                r: parseInt(result[1], 16),
+                g: parseInt(result[2], 16),
+                b: parseInt(result[3], 16)
+            } : { r: 189, g: 189, b: 222 };
+        }
+
+
+        
+        async function loadProteinLigandComplex() {
+            try {
+                console.log(`Loading complex: protein=${currentFileName}, ligand=${currentLigandPath}`);
+                
+                // Determine protein URL based on file type
+                let proteinUrl;
+                if (currentFileType === 'processed_complex') {
+                    proteinUrl = `/view_processed_file?path=${encodeURIComponent(currentFileName)}`;
+                } else {
+                    proteinUrl = `/view_protein/${currentFileName}`;
+                }
+                
+                const ligandUrl = `/view_result_file?path=${encodeURIComponent(currentLigandPath)}`;
+                
+                console.log(`Protein URL: ${proteinUrl}`);
+                console.log(`Ligand URL: ${ligandUrl}`);
+                
+                // Fetch both files
+                const [proteinResponse, ligandResponse] = await Promise.all([
+                    fetch(proteinUrl),
+                    fetch(ligandUrl)
+                ]);
+                
+                console.log(`🔵 Protein fetch: ${proteinResponse.status} ${proteinResponse.statusText}`);
+                console.log(`🟢 Ligand fetch: ${ligandResponse.status} ${ligandResponse.statusText}`);
+                
+                if (!proteinResponse.ok) {
+                    throw new Error(`Protein HTTP ${proteinResponse.status}: ${proteinResponse.statusText}`);
+                }
+                if (!ligandResponse.ok) {
+                    throw new Error(`Ligand HTTP ${ligandResponse.status}: ${ligandResponse.statusText}`);
+                }
+                
+                const [proteinData, ligandData] = await Promise.all([
+                    proteinResponse.text(),
+                    ligandResponse.text()
+                ]);
+                
+                console.log(`✅ Both files fetched - Protein: ${proteinData.length} chars, Ligand: ${ligandData.length} chars`);
+                
+                if (ligandData.length === 0) {
+                    console.error('❌ Ligand file is empty');
+                    throw new Error('Ligand file is empty');
+                }
+                
+                if (ligandData.length < 50) {
+                    console.warn(`⚠️ Ligand file is very small (${ligandData.length} chars) - may be corrupt`);
+                }
+                
+                // Combine protein and ligand data for complex viewing
+                const combinedPdb = proteinData + '\n' + ligandData;
+                const dataUrl = `data:text/plain;charset=utf-8,${encodeURIComponent(combinedPdb)}`;
+                
+                // MolStar viewer options for complex
+                const viewerOptions = {
+                    customData: {
+                        url: dataUrl,
+                        format: 'pdb',
+                        binary: false
+                    },
+                    alphafoldView: false,
+                    bgColor: { r: 255, g: 255, b: 255 },
+                    hideControls: true,
+                    hideCanvasControls: ['selection', 'animation', 'controlToggle'],
+                    sequencePanel: false,
+                    pdbeUrl: '',
+                    loadMaps: false,
+                    validation: false,
+                    domain: false,
+                    symmetry: false,
+                    assembly: false
+                };
+                
+                // Render the complex
+                await molstarViewer.render(document.getElementById('viewer3d'), viewerOptions);
+                console.log('✅ Complex loaded into MolStar');
+                
+                // Apply ChimeraX script to complex protein for clean visualization
+                if (currentFileType === 'processed_complex' && currentScript) {
+                    console.log(`🔵 Applying ChimeraX script to complex protein for clean view: ${currentScript}`);
+                    await applyChimeraXScriptMolStar(currentScript);
+                } else {
+                    console.log('✅ Applying default complex visualization');
+                    await applyComplexStyleMolStar();
+                }
+                
+                // Update info
+                document.getElementById('current-molecule-info').textContent = 
+                    `Protein-Ligand Complex loaded successfully`;
+                    
+            } catch (error) {
+                console.error('Error loading complex:', error);
+                showViewerError('Could not load protein-ligand complex', error);
+            }
+        }
+        
+        async function applyComplexStyleMolStar() {
+            try {
+                console.log('🧬 Applying MolStar complex style');
+                
+                if (!molstarViewer || !molstarViewer.visual || !molstarViewer.visual.update) {
+                    console.warn('⚠️ MolStar visual API not available, using default rendering');
+                    return;
+                }
+                
+                // Style protein with cartoon and transparent surface, ligand with ball-and-stick
+                await molstarViewer.visual.update({
+                    polymer: {
+                        type: 'cartoon',
+                        color: 'chain-id',
+                        opacity: 0.8
+                    },
+                    het: {
+                        type: 'ball-and-stick',
+                        color: 'element-symbol',
+                        opacity: 1.0
+                    },
+                    surface: {
+                        type: 'molecular-surface',
+                        color: 'uniform',
+                        colorValue: { r: 200, g: 200, b: 200 },
+                        opacity: 0.2
+                    }
+                });
+                
+                console.log('✅ Complex style applied successfully');
+            } catch (error) {
+                console.error('❌ Error applying complex style:', error);
+            }
+        }
+        
+        function showViewerError(title, message) {
+            const element3d = document.getElementById('viewer3d');
+            element3d.innerHTML = `
+                <div class="d-flex align-items-center justify-content-center h-100">
+                    <div class="text-center">
+                        <i class="fas fa-exclamation-triangle fa-3x text-warning mb-3"></i>
+                        <h5>${title}</h5>
+                        <p class="text-muted">${currentFileName}</p>
+                        <small class="text-muted">${message}</small>
+                    </div>
+                </div>
+            `;
+        }
+
+        function resetView() {
+            try {
+                if (molstarViewer && molstarViewer.visual && molstarViewer.visual.reset) {
+                    molstarViewer.visual.reset({ camera: true });
+                    console.log('✅ View reset');
+                } else {
+                    console.warn('⚠️ MolStar reset not available');
+                }
+            } catch (error) {
+                console.error('❌ Error resetting view:', error);
+            }
+        }
+
+        function toggleSpin() {
+            if (!molstarViewer) return;
+            
+            const spinBtn = document.getElementById('spin-btn');
+            try {
+                if (isSpinning) {
+                    if (animationHandle) {
+                        clearInterval(animationHandle);
+                        animationHandle = null;
+                    }
+                    spinBtn.innerHTML = '<i class="fas fa-sync"></i>';
+                    spinBtn.classList.remove('active');
+                    isSpinning = false;
+                    console.log('✅ Spin disabled');
+                } else {
+                    // MolStar doesn't have direct spin API, so we simulate it
+                    animationHandle = setInterval(() => {
+                        if (molstarViewer && molstarViewer.visual && molstarViewer.visual.camera) {
+                            try {
+                                molstarViewer.visual.camera({ name: 'spin', axis: 'y', angleDegrees: 1 });
+                            } catch (e) {
+                                // Ignore camera errors
+                            }
+                        }
+                    }, 50);
+                    spinBtn.innerHTML = '<i class="fas fa-sync fa-spin"></i>';
+                    spinBtn.classList.add('active');
+                    isSpinning = true;
+                    console.log('✅ Spin enabled');
+                }
+            } catch (error) {
+                console.error('❌ Error toggling spin:', error);
+            }
+        }
+
+        async function changeStyle() {
+            if (!molstarViewer) return;
+            
+            currentStyle = (currentStyle + 1) % styles.length;
+            const style = styles[currentStyle];
+            
+            try {
+                console.log(`🎨 Changing style to: ${style}`);
+                
+                if (!molstarViewer.visual || !molstarViewer.visual.update) {
+                    console.warn('⚠️ MolStar visual API not available');
+                    return;
+                }
+                
+                const isLigand = currentFileType === 'ligand' || currentFileName.toLowerCase().includes('ligand');
+                
+                if (currentComplexMode) {
+                    // In complex mode, apply style to both protein and ligand appropriately
+                    const visualUpdate = {
+                        het: {
+                            type: 'ball-and-stick',
+                            color: 'element-symbol',
+                            opacity: 1.0
+                        }
+                    };
+                    
+                    switch(style) {
+                        case 'cartoon':
+                            visualUpdate.polymer = {
+                                type: 'cartoon',
+                                color: 'chain-id',
+                                opacity: 0.8
+                            };
+                            visualUpdate.surface = {
+                                type: 'molecular-surface',
+                                color: 'uniform',
+                                colorValue: { r: 200, g: 200, b: 200 },
+                                opacity: 0.3
+                            };
+                            break;
+                        case 'ball-and-stick':
+                            visualUpdate.polymer = {
+                                type: 'ball-and-stick',
+                                color: 'residue-name',
+                                opacity: 1.0
+                            };
+                            break;
+                        case 'spacefill':
+                            visualUpdate.polymer = {
+                                type: 'spacefill',
+                                color: 'residue-name',
+                                opacity: 1.0
+                            };
+                            break;
+                        case 'wireframe':
+                            visualUpdate.polymer = {
+                                type: 'line',
+                                color: 'chain-id',
+                                opacity: 1.0
+                            };
+                            break;
+                    }
+                    
+                    await molstarViewer.visual.update(visualUpdate);
+                    
+                } else {
+                    // Single file mode
+                    let visualUpdate = {};
+                    
+                    if (isLigand) {
+                        // Ligand representations
+                        switch(style) {
+                            case 'cartoon':
+                            case 'ball-and-stick':
+                                visualUpdate = {
+                                    het: {
+                                        type: 'ball-and-stick',
+                                        color: 'element-symbol',
+                                        opacity: 1.0
+                                    }
+                                };
+                                break;
+                            case 'spacefill':
+                                visualUpdate = {
+                                    het: {
+                                        type: 'spacefill',
+                                        color: 'element-symbol',
+                                        opacity: 1.0
+                                    }
+                                };
+                                break;
+                            case 'wireframe':
+                                visualUpdate = {
+                                    het: {
+                                        type: 'line',
+                                        color: 'element-symbol',
+                                        opacity: 1.0
+                                    }
+                                };
+                                break;
+                        }
+                    } else {
+                        // Protein representations
+                        switch(style) {
+                            case 'cartoon':
+                                visualUpdate = {
+                                    polymer: {
+                                        type: 'cartoon',
+                                        color: 'chain-id',
+                                        opacity: 0.8
+                                    },
+                                    surface: {
+                                        type: 'molecular-surface',
+                                        color: 'uniform',
+                                        colorValue: { r: 200, g: 200, b: 200 },
+                                        opacity: 0.3
+                                    }
+                                };
+                                break;
+                            case 'ball-and-stick':
+                                visualUpdate = {
+                                    polymer: {
+                                        type: 'ball-and-stick',
+                                        color: 'residue-name',
+                                        opacity: 1.0
+                                    }
+                                };
+                                break;
+                            case 'spacefill':
+                                visualUpdate = {
+                                    polymer: {
+                                        type: 'spacefill',
+                                        color: 'residue-name',
+                                        opacity: 1.0
+                                    }
+                                };
+                                break;
+                            case 'wireframe':
+                                visualUpdate = {
+                                    polymer: {
+                                        type: 'line',
+                                        color: 'chain-id',
+                                        opacity: 1.0
+                                    }
+                                };
+                                break;
+                        }
+                    }
+                    
+                    await molstarViewer.visual.update(visualUpdate);
+                }
+                
+                // Update button
+                const styleBtn = document.getElementById('style-btn');
+                styleBtn.title = currentComplexMode ? `Complex: ${style}` : `Current: ${style}`;
+                
+                console.log(`✅ Style changed to: ${style}`);
+            } catch (error) {
+                console.error('❌ Error changing style:', error);
+            }
+        }
+
+        function downloadPDB() {
+            if (currentFileName && (currentFileType === 'protein' || currentComplexMode)) {
+                try {
+                    if (currentFileType === 'processed_protein' || currentFileType === 'processed_complex') {
+                        window.open(`/view_processed_file?path=${encodeURIComponent(currentFileName)}`, '_blank');
+                    } else {
+                        window.open(`/view_protein/${currentFileName}`, '_blank');
+                    }
+                    console.log('✅ PDB download initiated');
+                } catch (error) {
+                    console.error('❌ Error downloading PDB:', error);
+                }
+            } else {
+                console.log('⚠️ No PDB file available for download');
+            }
+        }
+    </script>
+
+    <div class="container my-5">
+        <div class="alert alert-secondary">
+            <div class="d-flex align-items-center mb-2">
+                <i class="fas fa-book me-2"></i>
+                <strong>Please cite our work</strong>
+            </div>
+            <pre class="mb-0"><code>@misc{sarigun2025pocketvinaenablesscalablehighly,
+      title={PocketVina Enables Scalable and Highly Accurate Physically Valid Docking through Multi-Pocket Conditioning}, 
+      author={Ahmet Sarigun and Bora Uyar and Vedran Franke and Altuna Akalin},
+      year={2025},
+      eprint={2506.20043},
+      archivePrefix={arXiv},
+      primaryClass={q-bio.QM},
+      url={https://arxiv.org/abs/2506.20043}, 
+}</code></pre>
+        </div>
+    </div>
+</body>
+</html> 

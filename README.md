@@ -2,6 +2,9 @@
 
 <p align="center">
   <a href="https://www.arxiv.org/abs/2506.20043"><img src="https://img.shields.io/badge/arXiv-preprint-B31B1B?style-for-the-badge&logo=arXiv"/></a>
+  <a href="https://zenodo.org/records/15733460"><img src="https://img.shields.io/badge/Zenodo-Dataset & Raw Results-1682D4?style-for-the-badge&logo=zenodo"/></a>
+  <a href="https://hub.docker.com/r/asarigun/pocketvina"><img src="https://img.shields.io/badge/Docker-Image-2496ED?style-for-the-badge&logo=docker"/></a>
+  <a href="https://www.youtube.com/watch?v=n8-YKOTvHGs"><img src="https://img.shields.io/badge/YouTube-UI Demo-FF0000?style-for-the-badge&logo=youtube"/></a>
   <!--<a href="ADD LINK"><img src="https://img.shields.io/badge/PyPI%20-package%20-3775A9?style-for-the-badge&logo=PyPI"/></a>-->
   <a href="https://isocpp.org/"><img src="https://img.shields.io/badge/C++-11.4.0-00599C?style-for-the-badge&logo=cplusplus"/></a>
   <a href="https://gcc.gnu.org/"><img src="https://img.shields.io/badge/C-11.4.0-3C2179?style-for-the-badge&logo=c"/></a>
@@ -57,6 +60,11 @@ pip install build
 python -m build
 pip install dist/pocketvina_gpu-0.1.0-py3-none-any.whl
 ```
+
+## Docker & Web UI
+
+- Web UI usage and detailed Docker run instructions are documented in [`app/README.md`](app/README.md).
+- Dockerfile for building the image is available at `Dockerfile` in the repo root.
 
 ## Quick Start
 

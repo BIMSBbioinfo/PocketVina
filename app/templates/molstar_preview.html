@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <title>Mol* Preview</title>
+    <link rel="stylesheet" href="https://unpkg.com/molstar@latest/build/viewer/molstar.css" />
+    <style>
+      :root{ --bg:#ffffff; --text:#111827; }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); }
+      #app { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+      .msp-left-panel, .msp-right-panel, .msp-sequence-wrapper, .msp-bottom-panel, .msp-controls, .msp-help, .msp-panel, .msp-log { display: none !important; }
+      .msp-layout { grid-template-columns: 1fr !important; grid-template-rows: 1fr !important; }
+      .msp-viewport { background: var(--bg) !important; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script src="https://unpkg.com/molstar@latest/build/viewer/molstar.js"></script>
+    <script>
+      function getParam(name, regex) {
+        var r = new RegExp(name + '=' + '(' + regex + ')[&]?', 'i');
+        return decodeURIComponent(((window.location.search || '').match(r) || [])[1] || '');
+      }
+
+      molstar.Viewer.create('app', {
+        layoutShowControls: false,
+        viewportShowExpand: false,
+        collapseLeftPanel: true,
+        pdbProvider: 'pdbe',
+        emdbProvider: 'pdbe',
+        resolutionMode: 'auto'
+      }).then(async viewer => {
+        try {
+          var c3d = viewer && viewer.plugin && viewer.plugin.canvas3d;
+          if (c3d && c3d.setProps) {
+            c3d.setProps({ renderer: { backgroundColor: { r: 255, g: 255, b: 255 } } });
+            c3d.setProps({ renderer: { clearColor: { r: 255, g: 255, b: 255 } } });
+          }
+        } catch (_) {}
+
+        var proteinUrl = getParam('protein-url', '[^&]+').trim();
+        var ligandUrl = getParam('ligand-url', '[^&]+').trim();
+
+        if (proteinUrl && ligandUrl) {
+          viewer.loadStructureFromUrl(proteinUrl, 'pdb', false).then(() => {
+            viewer.loadStructureFromUrl(ligandUrl, 'pdbqt', false);
+          });
+        } else {
+          var structureUrl = getParam('structure-url', '[^&]+').trim();
+          var structureUrlFormat = getParam('structure-url-format', '[a-z0-9]+').toLowerCase().trim();
+          var structureUrlIsBinary = getParam('structure-url-is-binary', '[^&]+').trim() === '1';
+          if (structureUrl) await viewer.loadStructureFromUrl(structureUrl, structureUrlFormat || 'pdb', structureUrlIsBinary);
+        }
+
+        setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+        window.addEventListener('unload', () => viewer.dispose());
+      });
+    </script>
+  </body>
+</html>

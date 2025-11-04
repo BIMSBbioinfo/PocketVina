@@ -48,6 +48,11 @@ RUN mkdir -p /etc/OpenCL/vendors && \
 
 WORKDIR /app
 
+# Clone and rearrange PocketVina
+RUN git clone https://github.com/BIMSBbioinfo/PocketVina && \
+    mv PocketVina/* . && \
+    rm -rf PocketVina/
+
 # Copy application source code (ensure you have a .dockerignore to exclude large files)
 COPY . .
 
@@ -55,7 +60,8 @@ COPY . .
 RUN python3 -m pip install --upgrade pip setuptools wheel build && \
     python3 -m build --wheel && \
     python3 -m pip install dist/*.whl && \
-    python3 -m pip install fastapi uvicorn python-multipart
+    python3 -m pip install --no-cache-dir --ignore-installed blinker && \
+    python3 -m pip install --no-cache-dir --ignore-installed flask fastapi uvicorn python-multipart boto3 loguru pandas
 
 # Set environment variables
 ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}" \
