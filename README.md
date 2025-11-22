@@ -21,7 +21,7 @@
 </p>
 
 <p float="center">
-  <img src="doc/assets/pocketvina_figure.png" width="98%" />
+  <img src="doc/assets/pocketvina.gif" width="98%" />
 </p>
 
 ## Requirements
