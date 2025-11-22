@@ -70,6 +70,7 @@ ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu:${LD_LIBRAR
     OPENCL_ROOT="/usr/local/cuda" \
     OPENCL_VENDOR_PATH="/etc/OpenCL/vendors" \
     NVIDIA_VISIBLE_DEVICES=all \
-    NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display \
+    PATH="/app/build/lib/pocketvina/p2rank_2.5:${PATH}"
 
 CMD ["python3"]
