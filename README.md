@@ -20,7 +20,7 @@
     GPU-accelerated protein-ligand docking with automated pocket detection, exploring through multi-pocket conditioning.
 </p>
 
-<p float="center">
+<p align="center">
   <img src="doc/assets/pocketvina.gif" width="98%" />
 </p>
 
