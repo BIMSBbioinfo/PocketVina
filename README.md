@@ -2,10 +2,12 @@
 
 <p align="center">
   <a href="https://www.arxiv.org/abs/2506.20043"><img src="https://img.shields.io/badge/arXiv-preprint-B31B1B?style-for-the-badge&logo=arXiv"/></a>
-  <a href="https://zenodo.org/records/15733460"><img src="https://img.shields.io/badge/Zenodo-Dataset & Raw Results-1682D4?style-for-the-badge&logo=zenodo"/></a>
+  <a href="https://bioinformatics.mdc-berlin.de/PocketVina/"><img src="https://img.shields.io/badge/Docs-Documentation-0A7BBB?style-for-the-badge&logo=readme"/></a>
+  <a href="https://pypi.org/project/pocketvina/"><img src="https://img.shields.io/pypi/v/pocketvina?label=PyPI&color=3775A9&logo=pypi&logoColor=white"/></a>
   <a href="https://hub.docker.com/r/asarigun/pocketvina"><img src="https://img.shields.io/badge/Docker-Image-2496ED?style-for-the-badge&logo=docker"/></a>
   <a href="https://www.youtube.com/watch?v=n8-YKOTvHGs"><img src="https://img.shields.io/badge/YouTube-UI Demo-FF0000?style-for-the-badge&logo=youtube"/></a>
-  <a href="https://pypi.org/project/pocketvina/"><img src="https://img.shields.io/pypi/v/pocketvina?label=PyPI&color=3775A9&logo=pypi&logoColor=white"/></a>
+  <a href="https://colab.research.google.com/github/BIMSBbioinfo/PocketVina/blob/main/notebooks/quickstart_colab.ipynb"><img src="https://img.shields.io/badge/Google_Colab-Tutorial-F9AB00?style-for-the-badge&logo=googlecolab"/></a>
+  <a href="https://zenodo.org/records/15733460"><img src="https://img.shields.io/badge/Zenodo-Dataset & Raw Results-1682D4?style-for-the-badge&logo=zenodo"/></a>
   <a href="https://isocpp.org/"><img src="https://img.shields.io/badge/C++-11.4.0-00599C?style-for-the-badge&logo=cplusplus"/></a>
   <a href="https://gcc.gnu.org/"><img src="https://img.shields.io/badge/C-11.4.0-3C2179?style-for-the-badge&logo=c"/></a>
   <a href="https://adoptium.net/"><img src="https://img.shields.io/badge/Java-17+-007396?style-for-the-badge&logo=openjdk"/></a>
@@ -13,8 +15,13 @@
   <a href="https://developer.nvidia.com/cuda-toolkit"><img src="https://img.shields.io/badge/CUDA-11.5+-76B900?style-for-the-badge&logo=nvidia"/></a>
   <a href="https://www.khronos.org/opencl/"><img src="https://img.shields.io/badge/OpenCL-3.0-4FC08D?style-for-the-badge&logo=opencl"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style-for-the-badge&logo=legal"/></a>
-  <a href="https://colab.research.google.com/github/BIMSBbioinfo/PocketVina/blob/main/notebooks/quickstart_colab.ipynb"><img src="https://img.shields.io/badge/Google_Colab-Tutorial-F9AB00?style-for-the-badge&logo=googlecolab"/></a>
-  <a href="https://bioinformatics.mdc-berlin.de/PocketVina/"><img src="https://img.shields.io/badge/Docs-Documentation-0A7BBB?style-for-the-badge&logo=readme"/></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/BIMSBbioinfo/PocketVina/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/BIMSBbioinfo/PocketVina/ci.yml?branch=main&label=tests&logo=githubactions&logoColor=white"/></a>
+  <a href="https://github.com/BIMSBbioinfo/PocketVina/actions/workflows/engine.yml"><img src="https://img.shields.io/github/actions/workflow/status/BIMSBbioinfo/PocketVina/engine.yml?branch=main&label=engine%20build&logo=githubactions&logoColor=white"/></a>
+  <a href="https://github.com/BIMSBbioinfo/PocketVina/actions/workflows/notebook.yml"><img src="https://img.shields.io/github/actions/workflow/status/BIMSBbioinfo/PocketVina/notebook.yml?branch=main&label=notebook&logo=githubactions&logoColor=white"/></a>
+  <a href="https://github.com/BIMSBbioinfo/PocketVina/actions/workflows/docs.yml"><img src="https://img.shields.io/github/actions/workflow/status/BIMSBbioinfo/PocketVina/docs.yml?branch=main&label=docs&logo=githubactions&logoColor=white"/></a>
 </p>
 
 <p align="center">
