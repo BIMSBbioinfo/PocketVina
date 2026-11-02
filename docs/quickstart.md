@@ -1,8 +1,13 @@
 # Getting started
 
-This page shows you how to dock the example ligands of the repository into its two example proteins. Run the steps
-in the `PocketVina` folder after the [installation](installation.md). The run should finish within one to two minutes on one
-GPU.
+This page shows you how to dock the example ligands of the repository into its two example proteins. The run should
+finish within one to two minutes on one GPU. After the [installation](installation.md), download the repository for its
+example files and run the steps in its folder:
+
+```bash
+git clone https://github.com/BIMSBbioinfo/PocketVina
+cd PocketVina
+```
 
 ## Input files
 

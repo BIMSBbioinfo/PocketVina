@@ -2,7 +2,21 @@
 
 ## Install
 
-Clone the repository and install PocketVina into a new conda environment:
+Install PocketVina from PyPI into a new conda environment:
+
+```bash
+conda create -n pocketvina -c conda-forge python=3.11 "openjdk>=17" -y
+conda activate pocketvina
+pip install pocketvina
+```
+
+This installs PocketVina with everything it uses, including the docking engine. P2Rank, the pocket finder, is
+downloaded into `~/.cache/pocketvina` at the first run. If you already have Python and Java 17 or later,
+`pip install pocketvina` alone is enough. Java is needed for P2Rank.
+
+### From source
+
+To use the latest code, or to have the example files of the [quick start](quickstart.md), install from the repository:
 
 ```bash
 git clone https://github.com/BIMSBbioinfo/PocketVina
@@ -10,15 +24,6 @@ cd PocketVina
 conda create -n pocketvina -c conda-forge python=3.11 "openjdk>=17" -y
 conda activate pocketvina
 pip install .
-```
-
-This installs PocketVina with everything it uses, including the docking engine. P2Rank, the pocket finder, is
-downloaded into `~/.cache/pocketvina` at the first run.
-
-If you already have Python and Java 17 or later, one line is enough. Java is needed for P2Rank.
-
-```bash
-pip install git+https://github.com/BIMSBbioinfo/PocketVina
 ```
 
 If you are upgrading from PocketVina 0.1, run `pip uninstall pocketvina-gpu` first. See [Migrating from PocketVina 0.1](migrating.md).
@@ -84,14 +89,12 @@ docker run --gpus all -it -p 7860:7860 pocketvina python3 app/app.py
 You can also install PocketVina into a plain virtual environment:
 
 ```bash
-git clone https://github.com/BIMSBbioinfo/PocketVina
-cd PocketVina
 python -m venv .venv && source .venv/bin/activate
-pip install .
+pip install pocketvina
 pocketvina setup p2rank --check      # the Java and P2Rank that runs use
 ```
 
-Java 17 or later must then come from your system. PocketVina is not on PyPI yet.
+Java 17 or later must then come from your system.
 
 You can add optional extras, for example with `pip install ".[meeko]"`. The extras are `meeko` for ligands prepared
 with Meeko, `app` for the web UI in `app/`, `dev` for the tests and `docs` for these pages.

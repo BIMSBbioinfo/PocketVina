@@ -30,7 +30,7 @@ PocketVina finds the pockets of each protein with P2Rank and docks every ligand 
 ## Installation
 
 ```bash
-pip install git+https://github.com/BIMSBbioinfo/PocketVina
+pip install pocketvina
 ```
 
 PocketVina runs on Linux with an NVIDIA GPU and needs Java 17+ for P2Rank. Other ways to install (conda, Docker) are
