@@ -1,0 +1,19 @@
+molstar-pv.js and molstar-pv.css: Mol* 5.13.1 (https://molstar.org, MIT licence: LICENSE), npm package molstar 5.13.1
+(sha512-iExD98bJN2P4JK6+pVMwdJlPePldBH8oNT0pZhs8ucxOp086NU2b/gThKwYMC3SWkdmv++a1g4fGwKfu4Glx1w==), bundled without its user interface by scripts/build-viewer.mjs from
+viewer-src/molstar-pv.js (esbuild 0.28.2).
+Changes to Mol*'s code (details and reasons: viewer-src/PATCHES.md in the site's source):
+- mol-geo/geometry/text/font-atlas.js (patch 1)
+- mol-geo/geometry/text/font-atlas.js (patch 2)
+- mol-geo/geometry/text/text-builder.js (patch 2)
+- mol-geo/geometry/text/text.js (patch 2)
+- mol-repr/structure/registry.js (trimmed)
+- mol-repr/volume/registry.js (trimmed)
+- mol-repr/particles/registry.js (trimmed)
+- mol-plugin/behavior/dynamic/custom-props.js (trimmed)
+- mol-plugin/spec.js (trimmed)
+- mol-plugin-state/formats/registry.js (trimmed)
+- mol-plugin-state/transforms.js (trimmed)
+- mol-model/structure/structure.js (trimmed)
+- not bundled (functions that throw instead): mol-io/reader/ccp4/parser.js, mol-io/reader/cube/parser.js, mol-io/reader/dx/parser.js, mol-io/reader/mtz/parser.js, mol-io/reader/ply/parser.js, mol-io/reader/obj/parser.js, mol-io/reader/obj/mtl-parser.js, mol-io/reader/vtp/parser.js, mol-io/reader/gro/parser.js, mol-io/reader/xyz/parser.js, mol-io/reader/mol2/parser.js, mol-io/reader/psf/parser.js, mol-io/reader/prmtop/parser.js, mol-io/reader/top/parser.js, mol-io/reader/dcd/parser.js, mol-io/reader/xtc/parser.js, mol-io/reader/trr/parser.js, mol-io/reader/nctraj/parser.js, mol-io/reader/lammps/data/parser.js, mol-io/reader/lammps/traj/parser.js, mol-io/reader/relion/star.js, mol-io/reader/dynamo/tbl.js, mol-io/reader/cryoet/ndjson.js, mol-io/reader/simularium/parser.js, mol-script/transpilers/all.js, mol-util/zip/zip.js
+molstar.lib.text.getFontAtlas is Mol*'s font atlas cache with patch 1 (one atlas per font), the module the text builder uses.
+Other npm packages in molstar-pv.js and their licences: THIRD-PARTY-LICENSES.txt.

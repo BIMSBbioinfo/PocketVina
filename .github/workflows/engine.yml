@@ -1,0 +1,79 @@
+name: Engine
+
+# Builds the docking engine from source with the commands in pocketvina/Makefile's header (docs/installation.md): `make`
+# with conda-forge's compiler, Boost (libboost-devel, linked dynamically) and OpenCL ICD loader + headers (ocl-icd,
+# opencl-headers), then `make install`. (The conda package pocketvina-engine, built by release.yml, runs the same
+# Makefile through recipe/build_engine.sh, with the Boost of conda-forge's rdkit builds (recipe/recipe.yaml) and a
+# header shim for Boost >= 1.85.)
+# The runner has no GPU, so the engine is only run with --version and --help, which need no OpenCL device. A full C++
+# build: only on main (when the engine sources change), v* tags and manual runs.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]  # path filters are not evaluated for tags
+    paths:
+      - "pocketvina/Makefile"
+      - "pocketvina/main/**"
+      - "pocketvina/lib/**"
+      - "pocketvina/OpenCL/**"
+      - ".github/workflows/engine.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engine-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (conda-forge Boost + ocl-icd)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        # a login shell activates the micromamba environment
+        shell: bash -el -o pipefail {0}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: engine
+          # cxx-compiler >= 2: plain gcc/g++ in the environment's bin/ (the Makefile's default CXX=gcc is conda's).
+          # Boost < 1.85: main.cpp includes boost/filesystem/convenience.hpp, which Boost 1.85 removed
+          create-args: >-
+            make
+            cxx-compiler>=2
+            libboost-devel<1.85
+            ocl-icd
+            opencl-headers
+          condarc: |
+            channels:
+              - conda-forge
+      - name: Toolchain
+        run: |
+          micromamba list
+          make -C pocketvina print BOOST_ROOT="$CONDA_PREFIX" OPENCL_ROOT="$CONDA_PREFIX"
+          command -v "${CXX:-gcc}"
+          "${CXX:-gcc}" --version
+      - name: Build
+        # `clean` first: the binary must be the one built here, not the prebuilt pocketvina/PocketVina-GPU from git
+        run: |
+          make -C pocketvina clean
+          make -C pocketvina BOOST_ROOT="$CONDA_PREFIX" OPENCL_ROOT="$CONDA_PREFIX"
+      - name: Run the engine
+        run: |
+          libs=$(ldd pocketvina/PocketVina-GPU)
+          echo "$libs"
+          if grep -q "not found" <<< "$libs"; then
+            echo "::error::the engine has unresolved shared libraries"
+            exit 1
+          fi
+          ./pocketvina/PocketVina-GPU --version
+          ./pocketvina/PocketVina-GPU --help
+      - name: make install
+        run: |
+          make -C pocketvina install PREFIX="$RUNNER_TEMP/engine"
+          "$RUNNER_TEMP/engine/bin/pocketvina-engine" --help > /dev/null
+          ls "$RUNNER_TEMP/engine/share/pocketvina/OpenCL/src/kernels" "$RUNNER_TEMP/engine/share/pocketvina/OpenCL/inc"

@@ -1,3 +1,116 @@
 [build-system]
-requires = ["setuptools>=45", "wheel", "setuptools_scm>=6.2"]
+# >= 77: SPDX `license` (PEP 639); also has bdist_wheel built in (setup.py tags the wheel)
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "pocketvina"
+dynamic = ["version"]  # pocketvina.__version__
+description = "GPU-accelerated protein-ligand docking with automated pocket detection, exploring through multi-pocket conditioning."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ahmet Sarigun", email = "Ahmet.Sariguen@mdc-berlin.de" }]
+keywords = ["docking", "virtual screening", "GPU", "OpenCL", "P2Rank", "AutoDock Vina"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: GPU",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+# pip only copies files: the engine is a prebuilt binary in the package (rebuild it with `make -C pocketvina`), P2Rank
+# is downloaded at first use (`pocketvina setup p2rank`), Java 17+ comes from the system or conda (openjdk).
+# OpenBabel: the openbabel-wheel package on PyPI; conda environments use conda-forge's openbabel instead (it provides
+# the same `openbabel` module), e.g. `conda install -c conda-forge openbabel` + `pip install --no-deps .`
+# pandas < 3: pandas 3 reads missing strings from Parquet as NaN instead of None (tested with pandas 2.x)
+# PoseBusters and the viewers are installed too (pocketvina.bust, pocketvina.viz); molviewspec (the Mol* viewer)
+# needs Python 3.10, on 3.9 the views use py3Dmol
+dependencies = [
+    "numpy",
+    "pandas<3",
+    "rdkit",
+    "openbabel-wheel",
+    "pyarrow",
+    "duckdb",
+    "click",
+    "tqdm",
+    "tomli; python_version < '3.11'",
+    "posebusters",
+    "py3Dmol",
+    "molviewspec; python_version >= '3.10'",
+]
+
+[project.optional-dependencies]
+# empty since 0.2: PoseBusters and the viewers are dependencies; kept so that `pip install ".[bust,viz]"` still works
+bust = []
+viz = []
+# Meeko's PyPI package declares no dependencies but cannot be imported without scipy and gemmi; Meeko 0.8 needs
+# Python 3.10 (`match` statements) without saying so, 0.7 is the last one that imports on Python 3.9
+meeko = ["meeko; python_version >= '3.10'", "meeko<0.8; python_version < '3.10'", "scipy", "gemmi"]
+app = ["flask"]
+# ruff pinned as in .github/workflows/ci.yml: newer releases add rules
+dev = ["pytest", "ruff==0.17.3", "nbclient", "nbformat", "ipykernel"]
+docs = ["sphinx", "myst-parser", "furo", "sphinx-click"]
+
+[project.scripts]
+pocketvina = "pocketvina.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/BIMSBbioinfo/PocketVina"
+Source = "https://github.com/BIMSBbioinfo/PocketVina"
+Documentation = "https://bioinformatics.mdc-berlin.de/PocketVina/"
+
+[tool.setuptools]
+packages = ["pocketvina", "pocketvina.io"]
+# only package-data goes into the wheel; MANIFEST.in adds the engine's C++ sources and the tests to the sdist
+include-package-data = false
+
+[tool.setuptools.package-data]
+# the prebuilt engine and the OpenCL kernel sources it compiles at first use (into a per-user cache); not the
+# Kernel*_Opt.bin files of older versions, Boost or P2Rank. The notebook viewer (pocketvina.workspace): the PocketVina
+# Atlas viewer, its Mol* bundle with its licences, and the page's script and style (viewer/README.md; viewer/upstream/,
+# the site's original viewer.js, only in the sdist)
+pocketvina = ["PocketVina-GPU", "OpenCL/inc/*", "OpenCL/src/kernels/*", "viewer/*.js", "viewer/*.css", "viewer/README.md",
+              "viewer/molstar-pv-5.13.1/*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "pocketvina.__version__" }
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+markers = [
+    "gpu: needs a GPU and the real engine; skipped unless POCKETVINA_GPU_TESTS=1",
+]
+# test/ and scripts_test/ are scratch folders, not test suites
+norecursedirs = [
+    ".*", "*.egg", "*.egg-info", "build", "dist", "venv", "node_modules", "__pycache__",
+    "data", "test", "scripts_test", "benchmark", "fastapi", "app", "example",
+    "boost_1_77_0", "p2rank_2.5", "OpenCL",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+src = [".", "tests"]
+extend-exclude = [
+    "app", "benchmark", "doc", "example", "fastapi", "scripts_test", "test",
+    "pocketvina/boost_1_77_0", "pocketvina/p2rank_2.5", "pocketvina/OpenCL",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# pre-v0.2 code: only real errors (pyflakes) are enforced
+"pocketvina/main.py" = ["E", "W", "B", "I", "F841"]
+# verbatim copy of the PocketVina Atlas pose-file module
+"pocketvina/io/posefile.py" = ["E401", "E501", "F401", "I001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pocketvina"]

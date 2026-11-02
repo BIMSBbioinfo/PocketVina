@@ -9,11 +9,12 @@
   <a href="https://isocpp.org/"><img src="https://img.shields.io/badge/C++-11.4.0-00599C?style-for-the-badge&logo=cplusplus"/></a>
   <a href="https://gcc.gnu.org/"><img src="https://img.shields.io/badge/C-11.4.0-3C2179?style-for-the-badge&logo=c"/></a>
   <a href="https://adoptium.net/"><img src="https://img.shields.io/badge/Java-17+-007396?style-for-the-badge&logo=openjdk"/></a>
-  <a href="https://www.python.org/downloads/release/"><img src="https://img.shields.io/badge/Python-3.6+-3776AB?style-for-the-badge&logo=python"/></a>
+  <a href="https://www.python.org/downloads/release/"><img src="https://img.shields.io/badge/Python-3.9+-3776AB?style-for-the-badge&logo=python"/></a>
   <a href="https://developer.nvidia.com/cuda-toolkit"><img src="https://img.shields.io/badge/CUDA-11.5+-76B900?style-for-the-badge&logo=nvidia"/></a>
   <a href="https://www.khronos.org/opencl/"><img src="https://img.shields.io/badge/OpenCL-3.0-4FC08D?style-for-the-badge&logo=opencl"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style-for-the-badge&logo=legal"/></a>
-  <a href="https://colab.research.google.com/drive/10I2Ydu9-5P4uOTRSDNOhP7gA2qUK8-mX?usp=sharing"><img src="https://img.shields.io/badge/Google_Colab-Tutorial-F9AB00?style-for-the-badge&logo=googlecolab"/></a>
+  <a href="https://colab.research.google.com/github/BIMSBbioinfo/PocketVina/blob/main/notebooks/quickstart_colab.ipynb"><img src="https://img.shields.io/badge/Google_Colab-Tutorial-F9AB00?style-for-the-badge&logo=googlecolab"/></a>
+  <a href="https://bioinformatics.mdc-berlin.de/PocketVina/"><img src="https://img.shields.io/badge/Docs-Documentation-0A7BBB?style-for-the-badge&logo=readme"/></a>
 </p>
 
 <p align="center">
@@ -24,249 +25,65 @@
   <img src="doc/assets/pocketvina.gif" width="98%" />
 </p>
 
-## Requirements
-
-- Python 3.6+
-- CUDA-capable NVIDIA GPU
-- OpenCL 3.0
-- Java 17+ (for P2Rank pocket detection)
-- CUDA Toolkit (v11.5+)
+PocketVina finds the pockets of each protein with P2Rank and docks every ligand into the best pockets on the GPU.
 
 ## Installation
 
 ```bash
-# Clone the repository and enter
-git clone https://github.com/BIMSBbioinfo/PocketVina
-cd PocketVina
-
-# Create & activate Conda env
-conda create --name pocketvina python=3.9 -c conda-forge -y
-conda activate pocketvina
-
-# Point to Conda libs for OpenCL
-export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
-
-# Install OpenCL runtimes, headers and clinfo
-conda install -c conda-forge ocl-icd opencl-headers clinfo -y
-
-# Test OpenCL installation
-clinfo
-
-# Then set ICD vendor path
-export OCL_ICD_VENDORS="/etc/OpenCL/vendors"
-
-# Build and install PocketVina
-pip install build
-python -m build
-pip install dist/pocketvina_gpu-0.1.0-py3-none-any.whl
+pip install git+https://github.com/BIMSBbioinfo/PocketVina
 ```
 
-## Docker & Web UI
-
-- Web UI usage and detailed Docker run instructions are documented in [`app/README.md`](app/README.md).
-- Dockerfile for building the image is available at `Dockerfile` in the repo root.
-
-## Quick Start
-
-```bash
-# Start your conda env
-conda activate PocketVina
-export LD_LIBRARY_PATH=$CONDA_PREFIX/lib/:$LD_LIBRARY_PATH
-```
-
-```python
-from pocketvina import PocketVinaGPU, PocketVinaConfig, P2RankConfig, PocketConfig
-
-# For using direct protein paths with P2Rank
-config = PocketVinaConfig(
-    protein_paths="example/protein_files.txt", ## ABSOLUTE PATH
-    smiles_file="example/ligands.txt", ## ABSOLUTE PATH
-    output_dir="results", ## ABSOLUTE PATH
-    batch_size=10,
-    p2rank_config=P2RankConfig(         
-        threads=8,
-        visualizations=False,
-        vis_copy_proteins=False,
-        output_dir="results", ## ABSOLUTE PATH
-        model='alphafold'
-    ),
-    pocket_config=PocketConfig(
-            size_x=20,
-            size_y=20,
-            size_z=20,
-            thread=1000
-    )
-)
-
-pocketvina = PocketVinaGPU(config, htvs_mode = True)
-pocketvina.execute_docking()
-```
-
-## Input Files Format
-
-1. `protein_files.txt`: List of protein PDB file paths (one per line)
-```bash
-/path/to/protein1.pdb      #GIVE ABSOLUTE PATH
-/path/to/protein2.pdb      #GIVE ABSOLUTE PATH
-```
-
-2. `ligands.txt`: List of SMILES strings (one per line)
-```bash
-molecule_name,smiles
-molecule1,CC1=CC=C(C=C1)C(=O)CCCN1CCC(O)(CC1)c1ccc(Cl)cc1
-molecule2,CC(C)(C)NCC(O)c1ccc(O)c(CO)c1
-```
-
-## Output Structure
-
-
-Results are organized in the output directory:
-
-```bash
-/PocketVina-GPU/results
-├── batch_1/                          # Processed ligand files for batch 1
-│   └── converted ligand files (.pdbqt)
-│
-├── batch_1_out/                      # Docking output files for batch 1
-│   ├── docking poses (.pdbqt)        # 3D structures of docked poses
-│   └── scores (.json)                # Binding scores and metadata
-│
-├── proteins/                         # Protein-related files
-│   ├── structures/                   # Processed protein files (.pdbqt)
-│   └── pockets/                      # Detected binding pockets (.csv)
-│
-├── configs/                          # Configuration files
-│   └── docking parameters for each run
-│
-├── p2rank_processor.log              # P2Rank run logs
-├── pocketvina_summary.log            # PocketVina run logs
-│                      
-├── combined_results.csv              # Final results in CSV format
-└── combined_results.json             # Final results in JSON format
-```
-
-## Benchmark Results
-
-All benchmark results and data (TargetDock-AI) are available on Zenodo (https://zenodo.org/records/15733460). To reproduce the published results, navigate into each dataset subfolder under `benchmark`—namely:
-
-- `astex`  
-- `dockgen`  
-- `pdbbind`  
-- `posebuster`
-
-and run:
-
-```bash
-python main.py
-```
+PocketVina runs on Linux with an NVIDIA GPU and needs Java 17+ for P2Rank. Other ways to install (conda, Docker) are
+in the [documentation](https://bioinformatics.mdc-berlin.de/PocketVina/installation.html).
 
 ## Citations
 
-If you use PocketVina-GPU in your work, please cite the following paper:
+If you use PocketVina, please cite our [preprint](https://arxiv.org/abs/2506.20043):
 
 ```bibtex
 @misc{sarigun2025pocketvinaenablesscalablehighly,
-      title={PocketVina Enables Scalable and Highly Accurate Physically Valid Docking through Multi-Pocket Conditioning}, 
+      title={PocketVina Enables Scalable and Highly Accurate Physically Valid Docking through Multi-Pocket Conditioning},
       author={Ahmet Sarigun and Bora Uyar and Vedran Franke and Altuna Akalin},
       year={2025},
       eprint={2506.20043},
       archivePrefix={arXiv},
       primaryClass={q-bio.QM},
-      url={https://arxiv.org/abs/2506.20043}, 
+      url={https://arxiv.org/abs/2506.20043},
 }
 ```
 
-and also cite the following papers for P2Rank and Vina families:
+PocketVina builds on P2Rank, QuickVina2-GPU, AutoDock Vina, PoseBusters, Mol\* and RDKit. Please cite them too: their
+papers are on the [citing page](https://bioinformatics.mdc-berlin.de/PocketVina/citing.html).
 
+## Getting started
 
-### P2Rank
-<details>
+- [Quick start](https://bioinformatics.mdc-berlin.de/PocketVina/quickstart.html): dock the example proteins and ligands, then look at the results in 3D
+- [Google Colab notebook](https://colab.research.google.com/github/BIMSBbioinfo/PocketVina/blob/main/notebooks/quickstart_colab.ipynb)
+- [Command line](https://bioinformatics.mdc-berlin.de/PocketVina/cli.html)
+- [Large screens on a cluster (SLURM)](https://bioinformatics.mdc-berlin.de/PocketVina/hpc.html)
 
-```bibtex
-@article{krivak2018p2rank,
-  title   = {P2Rank: machine learning based tool for rapid and accurate prediction of ligand binding sites from protein structure},
-  author  = {Krivák, Radoslav and Hoksza, David},
-  journal = {Journal of cheminformatics},
-  volume  = {10},
-  pages   = {1--12},
-  year    = {2018},
-  publisher = {Springer}
-}
-```
-</details>
+## Benchmarks
 
-### Vina Families
-<details>
+The benchmark data and results are on [Zenodo](https://zenodo.org/records/15733460). The code to reproduce them is in
+[benchmark/](benchmark/).
 
-```bibtex
-@article{tang2024vina,
-  title   = {Vina-GPU 2.1: towards further optimizing docking speed and precision of AutoDock Vina and its derivatives},
-  author  = {Tang, Shidi and Ding, Ji and Zhu, Xiangyu and Wang, Zheng and Zhao, Haitao and Wu, Jiansheng},
-  journal = {IEEE/ACM Transactions on Computational Biology and Bioinformatics},
-  year    = {2024},
-  publisher = {IEEE}
-}
+## Documentation
+
+The [documentation](https://bioinformatics.mdc-berlin.de/PocketVina/) was generated with
+[Sphinx](https://www.sphinx-doc.org) from the Markdown pages in [docs/](docs/index.md), using MyST-Parser and the
+Furo theme. To build it locally:
+
+```bash
+pip install -r docs/requirements.txt
+sphinx-build docs docs/_build/html
 ```
 
-```bibtex
-@article{ding2023vina,
-  title   = {Vina-GPU 2.0: further accelerating AutoDock Vina and its derivatives with graphics processing units},
-  author  = {Ding, Ji and Tang, Shidi and Mei, Zheming and Wang, Lingyue and Huang, Qinqin and Hu, Haifeng and Ling, Ming and Wu, Jiansheng},
-  journal = {Journal of chemical information and modeling},
-  volume  = {63},
-  number  = {7},
-  pages   = {1982--1998},
-  year    = {2023},
-  publisher = {ACS Publications}
-}
-```
+## Contact
 
-```bibtex
-@article{tang2022accelerating,
-  title   = {Accelerating autodock vina with gpus},
-  author  = {Tang, Shidi and Chen, Ruiqi and Lin, Mengru and Lin, Qingde and Zhu, Yanxiang and Ding, Ji and Hu, Haifeng and Ling, Ming and Wu, Jiansheng},
-  journal = {Molecules},
-  volume  = {27},
-  number  = {9},
-  pages   = {3041},
-  year    = {2022},
-  publisher = {MDPI}
-}
-```
-
-```bibtex
-@article{trott2010autodock,
-  title   = {AutoDock Vina: improving the speed and accuracy of docking with a new scoring function, efficient optimization, and multithreading},
-  author  = {Trott, Oleg and Olson, Arthur J},
-  journal = {Journal of computational chemistry},
-  volume  = {31},
-  number  = {2},
-  pages   = {455--461},
-  year    = {2010},
-  publisher = {Wiley Online Library}
-}
-```
-</details>
+For questions and bug reports, open an [issue](https://github.com/BIMSBbioinfo/PocketVina/issues) or start a
+[discussion](https://github.com/BIMSBbioinfo/PocketVina/discussions).
 
 ## License
 
-MIT License
-
-## Support
-
-For issues, please visit:
-
-[https://github.com/BIMSBbioinfo/PocketVina/issues⁠](https://github.com/BIMSBbioinfo/PocketVina/issues⁠)
-
-For discussions and questions, please visit:
-
-[https://github.com/BIMSBbioinfo/PocketVina/discussions⁠](https://github.com/BIMSBbioinfo/PocketVina/discussions⁠)
-
-## Acknowledgements
-
-We thank the following projects for their open-sourcing their codes:
-
-- [QuickVina2-GPU-2.1](https://github.com/DeltaGroupNJUPT/Vina-GPU-2.1/tree/main/QuickVina2-GPU-2.1)
-- [P2Rank](https://github.com/rdk/p2rank)
-
-
+PocketVina is released under the MIT License ([LICENSE](LICENSE)). The docking engine is based on AutoDock Vina and
+QuickVina2-GPU-2.1 and keeps their Apache License 2.0. The bundled Mol\* viewer is MIT licensed.

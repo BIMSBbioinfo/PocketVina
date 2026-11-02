@@ -1,0 +1,152 @@
+# Conda packages of PocketVina (rattler-build, recipe format v1); see README.md next to this file.
+#   pocketvina-engine  the PocketVina-GPU docking engine (C++/OpenCL) built against conda-forge's Boost and OpenCL,
+#                      installed as bin/pocketvina-engine with its kernel sources in share/pocketvina (linux-64)
+#   pocketvina         the Python package and the `pocketvina` command (noarch: python), with Java for P2Rank and the
+#                      pocketvina-engine of the same version
+# Build both from this checkout, from the repository root:
+#   rattler-build build --recipe recipe/ --output-dir <dir>
+schema_version: 1
+
+context:
+  version: "0.2.0"  # = pocketvina.__version__ (tests/test_recipe.py checks it)
+  # oldest Python of the noarch package's host, run and test environments (CFEP-25; conda-forge's global pinning has
+  # one, this overrides it). pyproject.toml allows 3.9, but conda-forge has no Python 3.9 rdkit for the Boost the
+  # engine is built with (libboost-devel below; the last Python 3.9 rdkit, 2025.03, has Boost 1.86)
+  python_min: "3.10"
+
+recipe:
+  name: pocketvina-split
+  version: ${{ version }}
+
+source:
+  # the checkout this recipe is in (only the files the two packages are built from; git-ignored ones are skipped)
+  path: ..
+  filter:
+    include:
+      - pyproject.toml
+      - setup.py
+      - MANIFEST.in
+      - README.md
+      - LICENSE
+      - pocketvina/*.py
+      - pocketvina/io/*.py
+      - pocketvina/viewer/**
+      - pocketvina/Makefile
+      - pocketvina/main/**
+      - pocketvina/lib/**
+      - pocketvina/OpenCL/**
+  # a public release instead: the sdist (`python -m build --sdist`, attached to the GitHub release or on PyPI) holds
+  # all of the above, the engine's C++ sources included
+  # url: https://github.com/BIMSBbioinfo/PocketVina/releases/download/v${{ version }}/pocketvina-${{ version }}.tar.gz
+  # sha256: <sha256sum of that file>
+
+build:
+  number: 0
+
+outputs:
+  - package:
+      name: pocketvina-engine
+    build:
+      script: build_engine.sh
+      skip:
+        - target_platform != "linux-64"
+    requirements:
+      build:
+        - ${{ compiler('cxx') }}
+        # the oldest glibc the engine runs with; conda-forge: `${{ stdlib('c') }}`, versioned by its global pinning
+        - sysroot_linux-64 2.17.*
+        - make
+      host:
+        # Boost is linked dynamically: the engine needs the same libboost as the environment's rdkit, so build with
+        # the Boost of conda-forge's current rdkit builds (1.90, migrated ahead of the global pinning's 1.88);
+        # conda-forge: no version here, its pinning and migrations set it
+        - libboost-devel 1.90.*
+        - ocl-icd
+        - opencl-headers
+      run:
+        - ocl-icd
+        # conda-forge's ocl-icd only reads the environment's etc/OpenCL/vendors: this adds the system's ICDs (the
+        # NVIDIA driver's /etc/OpenCL/vendors/nvidia.icd) to it, by a post-link script (pixi: OCL_ICD_VENDORS instead)
+        - ocl-icd-system
+    tests:
+      - package_contents:
+          bin:
+            - pocketvina-engine
+          files:
+            - share/pocketvina/OpenCL/inc/*.h
+            - share/pocketvina/OpenCL/src/kernels/kernel1.cl
+            - share/pocketvina/OpenCL/src/kernels/kernel2.cl
+      - script:
+          - pocketvina-engine --help
+          - pocketvina-engine --version
+    about:
+      summary: PocketVina-GPU docking engine (OpenCL, based on QuickVina2-GPU 2.1) used by pocketvina
+      # AutoDock Vina / QuickVina2-GPU sources (Apache-2.0), nlohmann/json (MIT), PocketVina's changes (MIT)
+      license: Apache-2.0 AND MIT
+      license_file: LICENSE
+
+  - package:
+      name: pocketvina
+    build:
+      noarch: python
+      script:
+        # a pure Python package: the engine is pocketvina-engine, never a prebuilt binary of the source tree
+        - rm -f pocketvina/PocketVina-GPU
+        - ${{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation
+      python:
+        entry_points:
+          - pocketvina = pocketvina.cli:main
+    requirements:
+      host:
+        - python ${{ python_min }}.*
+        - pip
+        - setuptools >=77
+      run:
+        - python >=${{ python_min }}
+        # pyproject.toml's dependencies; openbabel-wheel (PyPI) = openbabel here, duckdb = python-duckdb, and tomli
+        # (needed on Python < 3.11 only) for every Python, since a noarch package cannot depend on the Python version
+        - numpy
+        - pandas <3
+        - rdkit
+        - openbabel
+        - pyarrow
+        - python-duckdb
+        - click
+        - tqdm
+        - tomli
+        # PoseBusters and the viewers (pyproject.toml: molviewspec on Python >= 3.10, always the case here)
+        - posebusters
+        - py3dmol
+        - molviewspec
+        # P2Rank is a Java program (downloaded by `pocketvina setup p2rank` or at the first run). P2Rank 2.5.1 runs
+        # on Java 17 to 25 (its README says 17 to 23); a newer Java may be too new for the Groovy it bundles
+        - openjdk >=17,<26
+        - pocketvina-engine ==${{ version }}
+    tests:
+      - python:
+          imports:
+            - pocketvina
+            - pocketvina.cli
+            - pocketvina.pipeline
+          # pip's metadata names openbabel-wheel, which conda's openbabel provides under another name
+          pip_check: false
+          python_version: ${{ python_min }}.*
+      - script:
+          - pocketvina --help
+          - pocketvina --version
+          - pocketvina setup p2rank --help
+          - python -c "import pocketvina"
+          # the engine and kernel sources of pocketvina-engine, no engine in the Python package
+          - python -c "import os, sys, pocketvina.engine as e; p = e.engine_path(); assert os.path.samefile(p, os.path.join(sys.prefix, 'bin', 'pocketvina-engine')), p; assert os.path.samefile(e.kernel_source_dir(), os.path.join(sys.prefix, 'share', 'pocketvina')), e.kernel_source_dir(); assert not os.path.exists(os.path.join(e.PACKAGE_DIR, e.ENGINE_NAME))"
+          - python -c "from pocketvina.p2rank import check_java; check_java()"
+          # the notebook viewer's files (package data: pocketvina/viewer)
+          - python -c "from pocketvina import workspace; workspace._assets('inline')"
+    about:
+      summary: GPU-accelerated protein-ligand docking with automated pocket detection (P2Rank), exploring through multi-pocket conditioning
+
+about:
+  homepage: https://github.com/BIMSBbioinfo/PocketVina
+  repository: https://github.com/BIMSBbioinfo/PocketVina
+  license: MIT
+  license_file: LICENSE
+  summary: GPU-accelerated protein-ligand docking with automated pocket detection, exploring through multi-pocket conditioning

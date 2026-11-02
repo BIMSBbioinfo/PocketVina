@@ -24,6 +24,16 @@
 #include <string>
 #include <exception>
 #include <vector> // ligand paths
+#include <algorithm> // std::sort (ligand_directory order)
+#include <system_error> // std::error_code
+#include <cstdlib> // std::getenv, std::strtol
+#include <cerrno>
+#include <csignal>
+#ifdef __linux__
+#include <signal.h> // kill
+#include <sys/prctl.h> // PR_SET_PDEATHSIG
+#include <unistd.h> // getppid
+#endif
 #include <cmath> // for ceila
 #include <boost/program_options.hpp>
 #include <boost/filesystem/fstream.hpp>
@@ -520,7 +530,26 @@ model parse_bundle(const boost::optional<std::string>& rigid_name_opt, const boo
 		return parse_bundle(ligand_names);
 }
 
+// pocketvina.engine.run_engine starts the engine in a process group of its own (a timeout kills the whole group) and
+// sets POCKETVINA_DIE_WITH_PARENT=<its pid>: the engine is then killed with that process, also when the process is
+// killed outright (SIGKILL, a notebook kernel restart) and cannot stop the engine itself. Linux only.
+static void die_with_parent() {
+#ifdef __linux__
+	const char* value = std::getenv("POCKETVINA_DIE_WITH_PARENT");
+	if (value == NULL || *value == '\0')
+		return;
+	char* end = NULL;
+	const long expected = std::strtol(value, &end, 10);
+	if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0)
+		return;
+	// the parent died before prctl (getppid() also differs when a wrapper script forked the engine: that is fine)
+	if (*end == '\0' && expected > 0 && getppid() != (pid_t)expected && kill((pid_t)expected, 0) != 0 && errno == ESRCH)
+		raise(SIGKILL);
+#endif
+}
+
 int main(int argc, char* argv[]) {
+	die_with_parent();
 	clock_t start = clock();
 
 	using namespace boost::program_options;
@@ -832,12 +861,27 @@ Thank you!\n";
 				out_dir = ligand_directory + "_out";
 
 			std::experimental::filesystem::create_directory(out_dir);
+			// The ligands of one run share one random number generator, so their order changes the results.
+			// directory_iterator order depends on the file system: dock in file name order (byte-wise, as Python's
+			// sorted()) so that a fixed seed gives the same results everywhere. Only regular files (or links to
+			// them) whose name ends in ".pdbqt" are ligands; folders and other files are skipped.
+			const std::string ligand_ext = ".pdbqt";
+			std::vector<std::pair<std::string, std::string>> ligand_entries; // (file name, path)
 			for (const auto& entry : std::experimental::filesystem::directory_iterator(ligand_directory)) {
-				std::vector<std::string> tmp = { entry.path().string() };
+				std::string file_name = entry.path().filename().string();
+				std::error_code ec;
+				if (file_name.size() < ligand_ext.size() ||
+					file_name.compare(file_name.size() - ligand_ext.size(), ligand_ext.size(), ligand_ext) != 0 ||
+					!std::experimental::filesystem::is_regular_file(entry.status(ec)))
+					continue;
+				ligand_entries.emplace_back(file_name, entry.path().string());
+			}
+			std::sort(ligand_entries.begin(), ligand_entries.end());
+			for (const auto& ligand_entry : ligand_entries) {
+				std::vector<std::string> tmp = { ligand_entry.second };
 				ligand_names.push_back(tmp);
 				std::string delimiter1 = ".pdbqt";
-				std::string delimiter2 = ligand_directory;
-				std::string tmp2 = entry.path().string();
+				std::string tmp2 = ligand_entry.second;
 				std::string tmp3 = tmp2.substr(0, tmp2.find(delimiter1)) + "_out.pdbqt";
 				std::string tmp4 = out_dir + tmp3.substr(ligand_directory.length(), tmp3.length());
 				out_names.push_back(tmp4);

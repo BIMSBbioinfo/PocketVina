@@ -1,0 +1,8 @@
+html,body{margin:0;height:100%;overflow:hidden;background:#f4f4f6;color-scheme:light dark}
+html[data-theme=dark],html[data-theme=dark] body{background:#1c1c20}#app{position:absolute;inset:0}
+.msp-viewport-controls,.msp-state-snapshot-viewport-controls,.msp-layout-left,.msp-layout-right,
+.msp-layout-top,.msp-layout-bottom,.msp-drag-drop-overlay,.msp-task-state,.msp-toast-container{display:none!important}
+.msp-layout-standard,.msp-plugin,.msp-viewport{border:0!important;outline:0!important}
+
+/* hover info (residue under the pointer), small at the top right; other Mol* UI stays hidden */
+.msp-highlight-info{top:6px!important;right:6px!important;left:auto!important;bottom:auto!important;font:12px/1.4 'IBM Plex Sans',Arial,sans-serif!important;border-radius:2px!important;box-shadow:none!important;opacity:.92}

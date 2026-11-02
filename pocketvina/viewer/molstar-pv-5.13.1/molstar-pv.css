@@ -1,0 +1,14 @@
+/* Mol* 5.13.1 light skin (MIT, LICENSE): the rules for the elements viewer-src/molstar-pv.js draws (scripts/build-viewer.mjs) */
+.msp-plugin{font-family:Helvetica Neue,Segoe UI,Helvetica,Source Sans Pro,Arial,sans-serif;font-size:14px;line-height:1.42857143;position:absolute;inset:0}
+.msp-plugin *{box-sizing:border-box}
+.msp-plugin b,.msp-plugin strong{font-weight:700}
+.msp-plugin small{font-size:80%}
+.msp-plugin .msp-no-webgl{position:absolute;width:100%;height:100%;left:0;top:0;display:table;text-align:center;background:#eeece7}
+.msp-plugin .msp-viewport{position:absolute;inset:0;background:#eeece7}
+.msp-plugin .msp-highlight-toast-wrapper{position:absolute;right:10px;bottom:10px;max-width:95%;z-index:10000;pointer-events:none}
+.msp-plugin .msp-highlight-info{color:#ae5d04;padding:3px 10px;background:#eeece7;opacity:90%;max-width:400px;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;-o-user-select:none;user-select:none;cursor:default}
+.msp-plugin .msp-highlight-markdown-row{padding-left:10px}
+.msp-plugin .msp-highlight-simple-row{text-align:right}
+.msp-plugin .msp-highlight-info-hr{margin-inline:0px;margin-block:3px;border:none;height:1px;background-color:#ae5d04}
+.msp-plugin .msp-highlight-info-additional{font-size:85%;display:inline-block;color:#fa911e}
+.msp-plugin{background:#eeece7}

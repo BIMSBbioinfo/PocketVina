@@ -14,12 +14,182 @@
 #include "random.h"
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 #include <iomanip>
+#include <vector>
+#include <cstdlib>
+#include <cstdio>
+#include <system_error>
+#include <experimental/filesystem>
 
 #include <stdio.h>
 
 using namespace std;
+
+/**************************************************************************/
+/*************************    OpenCL kernel cache    **********************/
+/**************************************************************************/
+// <opencl_binary_path>/Kernel{1,2}_Opt.bin are loaded when both exist and the driver accepts them; otherwise both
+// kernels are built from the sources under $POCKETVINA_KERNEL_SRC (default ".": OpenCL/src/kernels/*.cl and
+// OpenCL/inc) and saved there, unless that is the working directory or inside the kernel source directory.
+// Building the engine with -DBUILD_KERNEL_FROM_SOURCE always rebuilds.
+
+static const char* const kernel_binary_names[2] = { "Kernel1_Opt.bin", "Kernel2_Opt.bin" };
+
+// The order of files is important!
+static const std::vector<std::string> kernel1_sources = { "code_head.cl", "kernel1.cl" };
+static const std::vector<std::string> kernel2_sources = { "code_head.cl", "mutate_conf.cl", "matrix.cl", "visited.cl",
+														  "quasi_newton.cl", "kernel2.cl" };
+
+static bool is_regular_file(const std::string& path) {
+	std::error_code ec;
+	return std::experimental::filesystem::is_regular_file(path, ec);
+}
+
+// True if path is root or inside it; a path that does not exist yet is judged by its nearest existing parent.
+static bool is_inside(const std::string& path, const std::string& root) {
+	namespace fs = std::experimental::filesystem;
+	std::error_code ec;
+	fs::path p = fs::absolute(path);
+	while (!fs::exists(p, ec) && p.has_relative_path()) p = p.parent_path();
+	const fs::path a = fs::canonical(p, ec);
+	if (ec) return false;
+	const fs::path b = fs::canonical(root, ec);
+	if (ec) return false;
+	fs::path::const_iterator ia = a.begin();
+	for (fs::path::const_iterator ib = b.begin(); ib != b.end(); ++ib, ++ia)
+		if (ia == a.end() || *ia != *ib) return false;
+	return true;
+}
+
+// NULL if the file cannot be read or the driver rejects it (e.g. built for another device or driver version).
+static cl_program load_program_binary(cl_context context, cl_device_id* devices, const std::string& path) {
+	std::ifstream f(path.c_str(), std::ios::in | std::ios::binary);
+	if (!f) return NULL;
+	std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+	if (data.empty()) return NULL;
+	const unsigned char* binary = (const unsigned char*)data.data();
+	size_t size = data.size();
+	cl_int binary_status = CL_SUCCESS, err;
+	cl_program program = clCreateProgramWithBinary(context, 1, devices, &size, &binary, &binary_status, &err);
+	if (err != CL_SUCCESS || binary_status != CL_SUCCESS) {
+		if (program != NULL) clReleaseProgram(program);
+		return NULL;
+	}
+	if (clBuildProgram(program, 1, devices, NULL, NULL, NULL) != CL_SUCCESS) {
+		clReleaseProgram(program);
+		return NULL;
+	}
+	return program;
+}
+
+static cl_program build_program_from_source(cl_context context, cl_device_id* devices, const std::string& src_root,
+											const std::vector<std::string>& files) {
+	std::string source;
+	for (size_t i = 0; i < files.size(); i++) {
+		const std::string path = src_root + "/OpenCL/src/kernels/" + files[i];
+		std::ifstream f(path.c_str(), std::ios::in | std::ios::binary);
+		std::stringstream text;
+		if (f) text << f.rdbuf();
+		if (!f || text.str().empty())
+			throw std::runtime_error("cannot read the OpenCL kernel source \"" + path + "\"; set POCKETVINA_KERNEL_SRC "
+									 "to the directory that holds OpenCL/src/kernels and OpenCL/inc");
+		if (i > 0) source += '\n';
+		source += text.str();
+	}
+	const char* source_ptr = source.c_str();
+	size_t source_size = source.size();
+	cl_int err;
+	cl_program program = clCreateProgramWithSource(context, 1, &source_ptr, &source_size, &err); checkErr(err);
+	std::string include_path = src_root + "/OpenCL/inc";
+	if (include_path.find_first_of(" \t") != std::string::npos) include_path = "\"" + include_path + "\"";
+	SetupBuildProgramWithSource(program, NULL, devices, include_path, "");
+	return program;
+}
+
+// Written through "<name>.tmp-<host>-<pid>" + rename(), so concurrent engines never read a partial file.
+static bool save_program_binary(cl_program program, const std::string& path) {
+	cl_uint num_devices = 0;
+	cl_int err = clGetProgramInfo(program, CL_PROGRAM_NUM_DEVICES, sizeof(cl_uint), &num_devices, NULL);
+	if (err != CL_SUCCESS || num_devices == 0) return false;
+	std::vector<size_t> sizes(num_devices, 0);
+	err = clGetProgramInfo(program, CL_PROGRAM_BINARY_SIZES, sizeof(size_t) * num_devices, sizes.data(), NULL);
+	if (err != CL_SUCCESS || sizes[0] == 0) return false;
+	std::vector<std::vector<unsigned char> > binaries(num_devices);
+	std::vector<unsigned char*> pointers(num_devices);
+	for (cl_uint i = 0; i < num_devices; i++) {
+		binaries[i].resize(sizes[i] > 0 ? sizes[i] : 1);
+		pointers[i] = binaries[i].data();
+	}
+	err = clGetProgramInfo(program, CL_PROGRAM_BINARIES, sizeof(unsigned char*) * num_devices, pointers.data(), NULL);
+	if (err != CL_SUCCESS) return false;
+
+	char host[256] = "host";
+	gethostname(host, sizeof(host) - 1);
+	host[sizeof(host) - 1] = '\0';
+	const std::string tmp_path = path + ".tmp-" + host + "-" + std::to_string((long)getpid());
+	FILE* fp = fopen(tmp_path.c_str(), "wb");
+	if (fp == NULL) return false;
+	bool ok = fwrite(pointers[0], 1, sizes[0], fp) == sizes[0];
+	ok = (fclose(fp) == 0) && ok;
+	ok = ok && std::rename(tmp_path.c_str(), path.c_str()) == 0;
+	if (!ok) std::remove(tmp_path.c_str());
+	return ok;
+}
+
+static void setup_kernel_programs(cl_program programs[2], cl_context context, cl_device_id* devices,
+								  const std::string& binary_dir) {
+	const std::string dir = binary_dir.empty() ? std::string(".") : binary_dir;
+	const std::string paths[2] = { dir + "/" + kernel_binary_names[0], dir + "/" + kernel_binary_names[1] };
+#ifdef BUILD_KERNEL_FROM_SOURCE
+	const bool always_rebuild = true;
+#else
+	const bool always_rebuild = false;
+#endif
+	if (!always_rebuild && is_regular_file(paths[0]) && is_regular_file(paths[1])) {
+		programs[0] = load_program_binary(context, devices, paths[0]);
+		programs[1] = programs[0] != NULL ? load_program_binary(context, devices, paths[1]) : NULL;
+		if (programs[0] != NULL && programs[1] != NULL) {
+			printf("\nLoaded OpenCL kernels from %s", dir.c_str()); fflush(stdout);
+			return;
+		}
+		if (programs[0] != NULL) clReleaseProgram(programs[0]);
+		printf("\nCannot load the OpenCL kernels in %s (built for another device or driver?), rebuilding them",
+			   dir.c_str()); fflush(stdout);
+	}
+
+	namespace fs = std::experimental::filesystem;
+	const char* src_env = getenv("POCKETVINA_KERNEL_SRC");
+	const std::string src_root = (src_env != NULL && src_env[0] != '\0') ? std::string(src_env) : std::string(".");
+	// Never write into the working directory (an opencl_binary_path left at its default "." means "no cache") nor
+	// into the kernel source tree, i.e. the package: old configs name its shipped QuickVina2-GPU-2-1 kernels.
+	const char* not_saved = NULL;
+	std::error_code ec, ec_cwd;
+	const fs::path cwd = fs::current_path(ec_cwd);
+	if (fs::equivalent(dir, cwd, ec_cwd))
+		not_saved = "is the working directory";
+	else if (is_inside(dir, src_root))
+		not_saved = "is inside the kernel source directory";
+	else
+		fs::create_directories(dir, ec);
+	bool saved = not_saved == NULL;
+
+	const std::vector<std::string>* sources[2] = { &kernel1_sources, &kernel2_sources };
+	for (int i = 0; i < 2; i++) {
+		printf(i == 0 ? "\n\nBuild kernel %d from source" : "\nBuild kernel %d from source", i + 1); fflush(stdout);
+		programs[i] = build_program_from_source(context, devices, src_root, *sources[i]);
+		if (not_saved == NULL) saved = save_program_binary(programs[i], paths[i]) && saved;
+	}
+	if (not_saved != NULL)
+		printf("\nOpenCL kernels not saved: opencl_binary_path %s", not_saved);
+	else if (saved)
+		printf("\nSaved OpenCL kernels to %s", dir.c_str());
+	else
+		printf("\nWarning: cannot save the OpenCL kernels to %s, they will be rebuilt next time", dir.c_str());
+	fflush(stdout);
+}
+
 volatile enum { FINISH, DOCKING, ABORT} status;
 void print_process() {
 	int count = 0;
@@ -110,61 +280,7 @@ void main_procedure_cl(cache& c, const std::vector<model>& ms,  const precalcula
 	//printf("\nSearch depth is set to %d", par.mc.search_depth);
 	printf("\nUsing random seed: %d", seed);
 
-#ifdef BUILD_KERNEL_FROM_SOURCE
-	const std::string default_work_path = ".";
-	const std::string include_path = default_work_path + "/OpenCL/inc"; //FIX it
-	const std::string addtion = "";
-
-	printf("\n\nBuild kernel 1 from source"); fflush(stdout);
-	char* program1_file_n[NUM_OF_FILES_KERNEL_1];
-	size_t program1_size_n[NUM_OF_FILES_KERNEL_1];
-	std::string file1_paths[NUM_OF_FILES_KERNEL_1] = {	default_work_path + "/OpenCL/src/kernels/code_head.cl",
-														//default_work_path + "/OpenCL/src/kernels/mutate_conf.cl",
-														//default_work_path + "/OpenCL/src/kernels/matrix.cl",
-														//default_work_path + "/OpenCL/src/kernels/quasi_newton.cl",
-														default_work_path + "/OpenCL/src/kernels/kernel1.cl" }; // The order of files is important!
-
-	read_n_file(program1_file_n, program1_size_n, file1_paths, NUM_OF_FILES_KERNEL_1);
-	std::string final_file;
-	size_t final_size = NUM_OF_FILES_KERNEL_1 - 1; // count '\n'
-	for (int i = 0; i < NUM_OF_FILES_KERNEL_1; i++) {
-		if (i == 0) final_file = program1_file_n[0];
-		else final_file = final_file + '\n' + (std::string)program1_file_n[i];
-		final_size += program1_size_n[i];
-	}
-	const char* final_files1_char = final_file.data();
-
-	programs[0] = clCreateProgramWithSource(context, 1, (const char**)&final_files1_char, &final_size, &err); checkErr(err);
-	SetupBuildProgramWithSource(programs[0], NULL, devices, include_path, addtion);
-	SaveProgramToBinary(programs[0], "Kernel1_Opt.bin");
-
-
-	printf("\nBuild kernel 2 from source"); fflush(stdout);
-	char* program2_file_n[NUM_OF_FILES_KERNEL_2];
-	size_t program2_size_n[NUM_OF_FILES_KERNEL_2];
-	std::string file2_paths[NUM_OF_FILES_KERNEL_2] = { default_work_path + "/OpenCL/src/kernels/code_head.cl",
-													   default_work_path + "/OpenCL/src/kernels/mutate_conf.cl",
-													   default_work_path + "/OpenCL/src/kernels/matrix.cl",
-													   default_work_path + "/OpenCL/src/kernels/visited.cl",
-													   default_work_path + "/OpenCL/src/kernels/quasi_newton.cl",
-													   default_work_path + "/OpenCL/src/kernels/kernel2.cl" }; // The order of files is important!
-
-	read_n_file(program2_file_n, program2_size_n, file2_paths, NUM_OF_FILES_KERNEL_2);
-	final_size = NUM_OF_FILES_KERNEL_2 - 1; // count '\n'
-	for (int i = 0; i < NUM_OF_FILES_KERNEL_2; i++) {
-		if (i == 0) final_file = program2_file_n[0];
-		else final_file = final_file + '\n' + (std::string)program2_file_n[i];
-		final_size += program2_size_n[i];
-	}
-	const char* final_files2_char = final_file.data();
-
-	programs[1] = clCreateProgramWithSource(context, 1, (const char**)&final_files2_char, &final_size, &err); checkErr(err);
-	SetupBuildProgramWithSource(programs[1], NULL, devices, include_path, addtion);
-	SaveProgramToBinary(programs[1], "Kernel2_Opt.bin");
-#endif
-	programs[0] = SetupBuildProgramWithBinary(context, devices, (opencl_binary_path + std::string("/Kernel1_Opt.bin")).c_str());
-
-	programs[1] = SetupBuildProgramWithBinary(context, devices, (opencl_binary_path + std::string("/Kernel2_Opt.bin")).c_str());
+	setup_kernel_programs(programs, context, devices, opencl_binary_path);
 
 	err = clUnloadPlatformCompiler(platforms[gpu_platform_id]); checkErr(err);
 	//Set kernel arguments

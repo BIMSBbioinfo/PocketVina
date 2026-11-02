@@ -49,5 +49,24 @@ scripts_test/
 fastapi/
 *.sif
 *.def
+*.pdbqt
+*.json
+*.csv
 results/
 bin/
+
+# made inside the checkout by the install instructions (README.md, docs/installation.md, recipe/README.md)
+.venv/
+conda-bld/
+
+# files the quickstart notebook writes when run in a checkout
+notebooks/proteins.txt
+notebooks/PV_*
+notebooks/pocketvina_quickstart/
+notebooks/__pycache__/
+
+# notes between the developers of v0.2 (local paths), not published
+docs/dev/
+
+# the small test fixtures (one AlphaFold model, the example ligands): the tests need them, also on GitHub CI
+!tests/data/**

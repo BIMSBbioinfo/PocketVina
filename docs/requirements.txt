@@ -1,0 +1,10 @@
+# Documentation build (.github/workflows/docs.yml, or locally):
+#   pip install -r docs/requirements.txt
+#   sphinx-build -W -b html docs docs/_build/html
+# pocketvina itself is imported from the checkout with its heavy dependencies mocked (docs/conf.py); only the
+# command line's click is needed for real. Same packages as the "docs" extra in pyproject.toml.
+sphinx>=7.2
+myst-parser>=3
+furo>=2024.1.29
+sphinx-click>=5
+click>=8
