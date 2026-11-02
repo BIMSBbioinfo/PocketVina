@@ -2,8 +2,9 @@ name: Release
 
 # On a v* tag (or a manual run): the Python sdist + wheel (python -m build) and the conda packages pocketvina-engine
 # (linux-64) and pocketvina (noarch) built by rattler-build from recipe/recipe.yaml (as a local channel), kept as
-# workflow artifacts for 90 days. Nothing is published: no PyPI, anaconda.org or GitHub release upload. On a tag,
-# the version of every package must be the tag without its "v" (pocketvina.__version__).
+# workflow artifacts for 90 days. On a tag, the version of every package must be the tag without its "v"
+# (pocketvina.__version__), and the sdist and the wheel are published on PyPI (job "pypi": PyPI trusted publishing,
+# no token; the publisher is set up on pypi.org for this workflow and the environment "pypi").
 on:
   push:
     tags: ["v*"]
@@ -30,8 +31,17 @@ jobs:
         # the wheel is built from the sdist; it holds the prebuilt engine pocketvina/PocketVina-GPU of this commit
         # and is tagged py3-none-linux_x86_64 (setup.py)
         run: |
-          python -m pip install --upgrade build twine
+          python -m pip install --upgrade build twine wheel auditwheel
           python -m build --outdir dist .
+          ls -l dist
+      - name: Tag the wheel manylinux_2_34
+        # PyPI takes no linux_x86_64 wheel. The engine needs glibc 2.34 and libstdc++ of GCC 11 (Ubuntu 22.04,
+        # Debian 12, RHEL 9), and libOpenCL.so.1 of the system; only the tag changes, not the files
+        run: |
+          auditwheel show dist/pocketvina-*-py3-none-linux_x86_64.whl | tee "$RUNNER_TEMP/auditwheel.txt"
+          grep -q '"manylinux_2_34_x86_64"' "$RUNNER_TEMP/auditwheel.txt" \
+            || { echo "::error::the engine no longer fits manylinux_2_34 (see auditwheel show above)"; exit 1; }
+          python -m wheel tags --remove --platform-tag manylinux_2_34_x86_64 dist/pocketvina-*-py3-none-linux_x86_64.whl
           ls -l dist
       - name: Check the metadata
         run: python -m twine check --strict dist/*
@@ -69,6 +79,24 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 90
+
+  pypi:
+    name: publish on PyPI
+    if: github.ref_type == 'tag'
+    needs: python
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/pocketvina/
+    permissions:
+      id-token: write  # PyPI trusted publishing
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: python-dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
 
   conda:
     name: conda packages (rattler-build)
