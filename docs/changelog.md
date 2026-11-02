@@ -20,7 +20,7 @@
 
 ### Changed
 
-- `pip install .` installs everything and compiles nothing. P2Rank is downloaded at the first run, and no
+- PocketVina is on PyPI: `pip install pocketvina` installs everything and compiles nothing. P2Rank is downloaded at the first run, and no
   environment variables need to be set ([Installation](installation.md)).
 - The pip package is now `pocketvina`. Uninstall `pocketvina-gpu` first ([Migrating from PocketVina 0.1](migrating.md)).
 - Ligands are docked from their largest fragment. `ligand_prep="legacy"` restores the preparation of 0.1.

@@ -62,20 +62,22 @@ def test_readme_install_is_one_line():
     the README shows no other command or code."""
     install = _section("Installation")
     commands = [line for body in _blocks("bash", install) for line in _shell_commands(body)]
-    assert commands == ["pip install git+https://github.com/BIMSBbioinfo/PocketVina"]
+    assert commands == ["pip install pocketvina"]
     for unwanted in ("OCL_ICD_VENDORS", "LD_LIBRARY_PATH", "[bust", "setup p2rank"):
         assert unwanted not in install
     assert {m.group("lang").strip() for m in FENCE.finditer(TEXT)} == {"bash", "bibtex"}  # no examples
 
 
-def test_install_from_source_is_short():
-    """docs/installation.md, first: clone, a conda environment with Java, `pip install .`."""
+def test_install_is_short():
+    """docs/installation.md: a conda environment with Java and `pip install pocketvina`; from source: clone, the same
+    environment, `pip install .`."""
     if not INSTALLATION.is_file():
         pytest.skip("no docs/installation.md (an sdist)")
-    body = _blocks("bash", INSTALLATION.read_text(encoding="utf-8"))[0]
-    assert _shell_commands(body) == ["git clone https://github.com/BIMSBbioinfo/PocketVina", "cd PocketVina",
-                                     'conda create -n pocketvina -c conda-forge python=3.11 "openjdk>=17" -y',
-                                     "conda activate pocketvina", "pip install ."]
+    pypi, source = _blocks("bash", INSTALLATION.read_text(encoding="utf-8"))[:2]
+    env = ['conda create -n pocketvina -c conda-forge python=3.11 "openjdk>=17" -y', "conda activate pocketvina"]
+    assert _shell_commands(pypi) == env + ["pip install pocketvina"]
+    assert _shell_commands(source) == ["git clone https://github.com/BIMSBbioinfo/PocketVina", "cd PocketVina", *env,
+                                       "pip install ."]
 
 
 def test_quick_start_uses_the_v01_config():

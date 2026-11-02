@@ -7,13 +7,13 @@ the new one:
 
 ```bash
 pip uninstall pocketvina-gpu
-pip install .
+pip install pocketvina
 ```
 
 If you installed 0.2 over 0.1 already, run `pip uninstall pocketvina-gpu` and then
-`pip install --force-reinstall --no-deps .`.
+`pip install --force-reinstall --no-deps pocketvina`.
 
-`pip install .` no longer downloads Boost or compiles the engine. P2Rank is downloaded at the first run, and the
+Installing PocketVina no longer downloads Boost or compiles the engine. P2Rank is downloaded at the first run, and the
 P2Rank of an older installation in `pocketvina/p2rank_2.5/` is still found. You no longer need to set
 `OCL_ICD_VENDORS` or other environment variables.
 

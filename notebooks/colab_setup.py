@@ -1,15 +1,16 @@
 """Setup of the quickstart notebook (``quickstart_colab.ipynb``): its install cell calls ``setup(REPO_URL, REPO_REF)``.
 
-On Google Colab (after the cell cloned the repository into ``/content/PocketVina``) it installs what the
-installation from source (docs/installation.md) does with conda, in Colab's own Python:
+On Google Colab (after the cell cloned the repository into ``/content/PocketVina``) it installs what
+docs/installation.md does with conda, in Colab's own Python:
 
 1. apt: Java 17 (for P2Rank), the OpenCL ICD loader and ``clinfo``;
 2. ``/etc/OpenCL/vendors/nvidia.icd``: Colab has the NVIDIA driver and its OpenCL library, but no ICD file that points
    to it, so without it OpenCL sees no GPU;
-3. the clone at ``REPO_REF`` (a ``REPO_REF`` changed later is checked out in the same clone);
-4. the engine: the prebuilt one if it runs here, else compiled (Boost 1.77 and ``make``; takes a while);
-5. ``pip install`` of the clone (PocketVina with PoseBusters and the viewers);
-6. P2Rank (``pocketvina setup p2rank``) and a check that OpenCL lists the GPU.
+3. the clone at ``REPO_REF``, for the example files (a ``REPO_REF`` changed later is checked out in the same clone);
+4. ``pip install pocketvina`` from PyPI (with PoseBusters and the viewers). If its prebuilt engine does not run here, or
+   with ``build=True``, the engine is compiled from the clone (Boost 1.77 and ``make``; takes a while) and the clone
+   is installed instead;
+5. P2Rank (``pocketvina setup p2rank``) and a check that OpenCL lists the GPU.
 
 Every step is skipped when it is done already, so the cell can run again (e.g. after a runtime restart); command output
 goes to ``/content/pocketvina_install.log``. Then the notebook works in the clone's ``notebooks/`` folder, as a local
@@ -101,15 +102,18 @@ def build_engine(pkg: Path, log=None):
         raise RuntimeError(f"the engine compiled in {pkg} does not run, see {log or INSTALL_LOG}")
 
 
-def _installed_commit(repo_dir: Path) -> str:
-    return subprocess.run(["git", "-C", str(repo_dir), "rev-parse", "HEAD"], capture_output=True, text=True).stdout
+def _installed_engine() -> Path:
+    """The engine binary of the installed pocketvina package (found without importing it)."""
+    importlib.invalidate_caches()
+    spec = importlib.util.find_spec("pocketvina")
+    return Path(list(spec.submodule_search_locations)[0]) / "PocketVina-GPU"
 
 
 def install_colab(repo_url, repo_ref, repo_dir=COLAB_REPO_DIR, build=False):
-    """Steps 1-6 of the module docstring."""
+    """Steps 1-5 of the module docstring."""
     t0 = time.time()
     repo_dir = Path(repo_dir)
-    print("1/6 Java 17, OpenCL loader (apt)")
+    print("1/5 Java 17, OpenCL loader (apt)")
     if subprocess.run(["dpkg", "-s", *APT_PACKAGES], capture_output=True).returncode != 0:
         apt_install(APT_PACKAGES)
     java_homes = sorted(Path("/usr/lib/jvm").glob("java-17-openjdk-*"))
@@ -119,7 +123,7 @@ def install_colab(repo_url, repo_ref, repo_dir=COLAB_REPO_DIR, build=False):
     if not os.environ["PATH"].startswith(f"{java_homes[0]}/bin:"):
         os.environ["PATH"] = f"{java_homes[0]}/bin:{os.environ['PATH']}"
 
-    print("2/6 OpenCL ICD file of the NVIDIA driver")
+    print("2/5 OpenCL ICD file of the NVIDIA driver")
     icd = Path("/etc/OpenCL/vendors/nvidia.icd")
     if not icd.is_file():
         libs = [p for name in ("libnvidia-opencl.so.1", "libnvidia-opencl.so.*")  # the versioned file if no .so.1
@@ -127,21 +131,18 @@ def install_colab(repo_url, repo_ref, repo_dir=COLAB_REPO_DIR, build=False):
         icd.parent.mkdir(parents=True, exist_ok=True)
         icd.write_text(f"{libs[0] if libs else 'libnvidia-opencl.so.1'}\n")
 
-    print(f"3/6 PocketVina repository ({repo_ref})")
+    print(f"3/5 PocketVina repository ({repo_ref}), for the example files")
     clone_repo(repo_url, repo_ref, repo_dir)
 
-    print("4/6 docking engine")
-    pkg = repo_dir / "pocketvina"
-    if build or not engine_runs(pkg / "PocketVina-GPU"):
-        build_engine(pkg)
-
-    print("5/6 pip install (PocketVina, PoseBusters, the viewers)")
-    marker = repo_dir / ".git" / "pocketvina_notebook_installed"
-    commit = _installed_commit(repo_dir)
-    if importlib.util.find_spec("pocketvina") is None or not marker.is_file() or marker.read_text() != commit:
+    print("4/5 pip install pocketvina (with PoseBusters and the viewers)")
+    if build or importlib.util.find_spec("pocketvina") is None:
         loaded = {m: getattr(sys.modules[m], "__version__", None) for m in RESTART_IF_CHANGED if m in sys.modules}
-        sh(f"{sys.executable} -m pip install -q {repo_dir}")
-        marker.write_text(commit)
+        if not build:
+            sh(f"{sys.executable} -m pip install -q pocketvina")
+        if build or not engine_runs(_installed_engine()):
+            print("   compiling the engine from the repository")
+            build_engine(repo_dir / "pocketvina")
+            sh(f"{sys.executable} -m pip install -q {repo_dir}")
         importlib.invalidate_caches()
         from importlib.metadata import version
 
@@ -150,7 +151,7 @@ def install_colab(repo_url, repo_ref, repo_dir=COLAB_REPO_DIR, build=False):
             raise RuntimeError(f"pip changed {', '.join(changed) or 'pocketvina'}, which this session has loaded "
                                "already: Runtime > Restart session, then Run all")
 
-    print("6/6 P2Rank, OpenCL devices")
+    print("5/5 P2Rank, OpenCL devices")
     sh(f"{sys.executable} -m pocketvina setup p2rank")
     devices = subprocess.run(["clinfo", "-l"], capture_output=True, text=True).stdout.strip()
     print("   OpenCL:", devices.replace("\n", "\n           ") if devices else "no device (not a GPU runtime?)")
@@ -169,7 +170,7 @@ def setup(repo_url, repo_ref, build=False):
         if (checkout / "pocketvina" / "__init__.py").is_file():
             sys.path.insert(0, str(checkout))
     if importlib.util.find_spec("pocketvina") is None:
-        raise RuntimeError("PocketVina is not installed: pip install git+https://github.com/BIMSBbioinfo/PocketVina")
+        raise RuntimeError("PocketVina is not installed: pip install pocketvina")
     import pocketvina
 
     print(f"PocketVina {pocketvina.__version__} ({Path(pocketvina.__file__).parent}); working folder {Path.cwd()}")
