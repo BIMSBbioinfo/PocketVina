@@ -1,11 +1,9 @@
 name: Notebook
 
-# Executes notebooks/quickstart_colab.ipynb headless with nbclient in its CI mode (POCKETVINA_NOTEBOOK_CI=1) against
-# pocketvina pip-installed from the checkout with the extras the notebook uses (tests/test_notebook.py, part of ci.yml,
-# executes it against the checkout itself and checks its outputs): the install cell installs nothing, the fake engine
-# (tests/fake_engine.py) docks without a GPU, and the pockets come from the fixture P2Rank predictions in tests/data
-# instead of P2Rank. The executed notebook and its export are kept as an artifact for 14 days. Only on main (when the
-# notebook or what it runs changes), v* tags and manual runs.
+# Runs notebooks/quickstart_colab.ipynb from start to end on Colab's Python (tests/test_notebook.py): headless with
+# nbclient, the fake engine (tests/fake_engine.py) instead of the GPU and the fixture P2Rank pockets of tests/data
+# instead of P2Rank. ci.yml runs the same test on Python 3.9 to 3.12. Only on main (when the notebook or what it runs
+# changes), v* tags and manual runs.
 on:
   push:
     branches: [main]
@@ -15,6 +13,7 @@ on:
       - "pocketvina/**"
       - "example/**"
       - "tests/fake_engine.py"
+      - "tests/test_notebook.py"
       - "tests/data/**"
       - "pyproject.toml"
       - "setup.py"
@@ -30,13 +29,9 @@ concurrency:
 
 jobs:
   execute:
-    name: Quickstart notebook (CI mode)
+    name: Quickstart notebook
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      POCKETVINA_NOTEBOOK_CI: "1"
-      # the repository the notebook reads example/ and tests/ (fake engine, fixture pockets) from
-      POCKETVINA_REPO_DIR: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -45,42 +40,6 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - name: Install pocketvina with the notebook's extras
-        run: python -m pip install ".[bust,viz,dev]"
-      - name: Execute the notebook
-        # in an empty working directory outside the checkout: everything the notebook writes goes there
-        run: |
-          mkdir -p "$RUNNER_TEMP/notebook"
-          python - notebooks/quickstart_colab.ipynb "$RUNNER_TEMP/notebook" <<'EOF'
-          import sys
-          from pathlib import Path
-
-          import nbformat
-          from nbclient import NotebookClient
-
-          src, workdir = Path(sys.argv[1]), Path(sys.argv[2])
-          nb = nbformat.read(src, as_version=4)
-          client = NotebookClient(nb, kernel_name="python3", timeout=600, allow_errors=False,
-                                  resources={"metadata": {"path": str(workdir)}})
-          try:
-              client.execute()
-          finally:  # also a failed run, for the artifact
-              nbformat.write(nb, workdir / src.name)
-          EOF
-      - name: Check the results
-        working-directory: ${{ runner.temp }}/notebook
-        run: |
-          pocketvina info --results pocketvina_quickstart/results
-          pocketvina query best --results pocketvina_quickstart/results --top 5
-          test -s pocketvina_quickstart/best_poses.zip
-          # nothing written into the checkout (pip's build/ and *.egg-info are ignored by git)
-          git -C "$GITHUB_WORKSPACE" status --porcelain
-          test -z "$(git -C "$GITHUB_WORKSPACE" status --porcelain)"
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: notebook
-          path: |
-            ${{ runner.temp }}/notebook/quickstart_colab.ipynb
-            ${{ runner.temp }}/notebook/pocketvina_quickstart/best_poses.zip
-          if-no-files-found: warn
-          retention-days: 14
+        run: python -m pip install ".[bust,viz,dev]" "setuptools>=77"
+      - name: Run the notebook
+        run: python -m pytest tests/test_notebook.py -m "not gpu" -v
