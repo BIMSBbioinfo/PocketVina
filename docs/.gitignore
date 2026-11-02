@@ -1,0 +1,2 @@
+# the HTML pages that `sphinx-build -b html docs docs/_build/html` writes (docs/requirements.txt, README.md)
+/_build/

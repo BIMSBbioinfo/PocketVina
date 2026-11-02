@@ -1,17 +1,28 @@
 import os
-from .main import PocketVinaGPU, P2RankProcessor, PocketVinaConfig, P2RankConfig, PocketConfig, Paths
 
-__version__ = "0.1.0"
+from .main import P2RankConfig, P2RankProcessor, Paths, PocketConfig, PocketVinaConfig, PocketVinaGPU
+
+__version__ = "0.2.0"
+# not run_atlas or Results (see __getattr__): `from pocketvina import *` would import pyarrow, which the "files"
+# format lacks
 __all__ = ["PocketVinaGPU", "P2RankProcessor", "PocketVinaConfig", "P2RankConfig", "PocketConfig", "Paths"]
 
-# Set P2Rank environment variables
+# Paths that importing pocketvina used to put into os.environ (P2RANK_HOME, PATH, LD_LIBRARY_PATH, OPENCL_ROOT),
+# kept as attributes for scripts that read them. Importing changes no environment variable any more: P2Rank is found
+# by pocketvina.p2rank ($P2RANK_HOME, `prank` on PATH, this p2rank_2.5 folder of older source installs, the user
+# cache) and the engine gets its environment from pocketvina.engine.
 package_dir = os.path.dirname(os.path.abspath(__file__))
 p2rank_home = os.path.join(package_dir, 'p2rank_2.5')
-os.environ['P2RANK_HOME'] = p2rank_home
-os.environ['PATH'] = f"{p2rank_home}:{os.environ.get('PATH', '')}"
-
-# Set Boost and OpenCL environment variables
 boost_lib_path = os.path.join(package_dir, "boost_1_77_0/stage/lib")
 opencl_path = os.path.join(package_dir, "OpenCL")
-os.environ['LD_LIBRARY_PATH'] = f"{boost_lib_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
-os.environ['OPENCL_ROOT'] = opencl_path
+
+
+def __getattr__(name):
+    # imported on first use: the atlas pipeline and the results reader load pyarrow
+    if name == "run_atlas":
+        from .pipeline import run_atlas
+        return run_atlas
+    if name == "Results":
+        from .io.results import Results
+        return Results
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

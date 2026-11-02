@@ -1,0 +1,67 @@
+{
+    "AF-Q96LA5-F1-model_v4-pocket1-molecule2_cleaned_out-results": [
+        {
+            "affinity (kcal/mol)": -5.6,
+            "dist from rmsd l.b.": 0.0,
+            "dist from rmsd u.b.": 0.0,
+            "mode": 1,
+            "pocket rank": 1
+        },
+        {
+            "affinity (kcal/mol)": -4.7,
+            "dist from rmsd l.b.": 2.539,
+            "dist from rmsd u.b.": 3.24,
+            "mode": 2,
+            "pocket rank": 1
+        },
+        {
+            "affinity (kcal/mol)": -4.6,
+            "dist from rmsd l.b.": 4.298,
+            "dist from rmsd u.b.": 9.374,
+            "mode": 3,
+            "pocket rank": 1
+        },
+        {
+            "affinity (kcal/mol)": -4.5,
+            "dist from rmsd l.b.": 3.088,
+            "dist from rmsd u.b.": 4.027,
+            "mode": 4,
+            "pocket rank": 1
+        },
+        {
+            "affinity (kcal/mol)": -4.4,
+            "dist from rmsd l.b.": 5.283,
+            "dist from rmsd u.b.": 7.424,
+            "mode": 5,
+            "pocket rank": 1
+        },
+        {
+            "affinity (kcal/mol)": -4.3,
+            "dist from rmsd l.b.": 6.754,
+            "dist from rmsd u.b.": 8.871,
+            "mode": 6,
+            "pocket rank": 1
+        },
+        {
+            "affinity (kcal/mol)": -4.3,
+            "dist from rmsd l.b.": 5.174,
+            "dist from rmsd u.b.": 7.246,
+            "mode": 7,
+            "pocket rank": 1
+        },
+        {
+            "affinity (kcal/mol)": -4.2,
+            "dist from rmsd l.b.": 3.968,
+            "dist from rmsd u.b.": 4.836,
+            "mode": 8,
+            "pocket rank": 1
+        },
+        {
+            "affinity (kcal/mol)": -4.2,
+            "dist from rmsd l.b.": 3.386,
+            "dist from rmsd u.b.": 9.475,
+            "mode": 9,
+            "pocket rank": 1
+        }
+    ]
+}

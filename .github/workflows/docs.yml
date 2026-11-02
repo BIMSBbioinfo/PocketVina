@@ -1,0 +1,68 @@
+name: Docs
+
+# Builds the documentation in docs/ with Sphinx (warnings are errors) and, for a push to main, publishes it with
+# GitHub Pages at https://bioinformatics.mdc-berlin.de/PocketVina/ . Pull requests and dev only build it.
+# One-time setup by a repository admin: Settings > Pages > Source: "GitHub Actions".
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "docs/**"
+      - "doc/**"
+      - "pocketvina/**"
+      - "notebooks/**"
+      - "README.md"
+      - "pyproject.toml"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "doc/**"
+      - "pocketvina/**"
+      - "notebooks/**"
+      - "README.md"
+      - "pyproject.toml"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Sphinx (-W)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+      - name: Install
+        run: python -m pip install -r docs/requirements.txt
+      - name: Build
+        run: sphinx-build -W -b html docs "$RUNNER_TEMP/html"
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: ${{ runner.temp }}/html
+
+  deploy:
+    name: GitHub Pages
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

@@ -1,11 +1,30 @@
-include LICENSE
-include README.md
-include pyproject.toml
-include pocketvina/Makefile
-include pocketvina/PocketVina-GPU
-recursive-include pocketvina/lib *
-recursive-include pocketvina/OpenCL *
-recursive-include pocketvina/QuickVina2-GPU-2-1 *
-recursive-include pocketvina/main *
-recursive-include pocketvina/boost_1_77_0 *
-recursive-include pocketvina/p2rank_2.5 *
+# sdist = the wheel's files (package data in pyproject.toml) + what rebuilding the engine and the tests need
+include LICENSE README.md pyproject.toml setup.py MANIFEST.in
+# the engine: prebuilt binary, OpenCL kernel sources, and its C++ sources (make -C pocketvina; Boost not included)
+include pocketvina/Makefile pocketvina/PocketVina-GPU
+graft pocketvina/OpenCL
+graft pocketvina/lib
+graft pocketvina/main
+# the notebook viewer (package data) and the site's original viewer.js it is compared with (viewer/README.md)
+graft pocketvina/viewer
+# python -m pytest tests (the tests also read the example inputs and run the Colab notebook)
+graft tests
+graft example
+include notebooks/*.ipynb notebooks/*.py
+# never shipped, also if a file finder (e.g. setuptools_scm in the build environment) or the SOURCES.txt of an older
+# build (pocketvina.egg-info/, read again by every build) adds what git tracks: Boost and P2Rank trees of older source
+# installs, the OpenCL kernel binaries of older versions (now compiled at first use into a per-user cache), and the
+# folders and files that are not part of the package (benchmarks, scratch folders, web UI, container files)
+prune pocketvina/boost_1_77_0
+prune pocketvina/p2rank_2.5
+prune pocketvina/QuickVina2-GPU-2-1
+exclude pocketvina/*.bin
+prune benchmark
+prune scripts_test
+prune test
+prune fastapi
+prune app
+prune doc
+prune .github
+exclude Dockerfile .dockerignore .gitignore pocketvina.def
+global-exclude *.py[cod]

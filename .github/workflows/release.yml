@@ -1,0 +1,123 @@
+name: Release
+
+# On a v* tag (or a manual run): the Python sdist + wheel (python -m build) and the conda packages pocketvina-engine
+# (linux-64) and pocketvina (noarch) built by rattler-build from recipe/recipe.yaml (as a local channel), kept as
+# workflow artifacts for 90 days. Nothing is published: no PyPI, anaconda.org or GitHub release upload. On a tag,
+# the version of every package must be the tag without its "v" (pocketvina.__version__).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  python:
+    name: sdist + wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Build
+        # the wheel is built from the sdist; it holds the prebuilt engine pocketvina/PocketVina-GPU of this commit
+        # and is tagged py3-none-linux_x86_64 (setup.py)
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build --outdir dist .
+          ls -l dist
+      - name: Check the metadata
+        run: python -m twine check --strict dist/*
+      - name: Version = tag
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          for pattern in "pocketvina-${TAG#v}.tar.gz" "pocketvina-${TAG#v}-py3-*.whl"; do
+            if ! compgen -G "dist/$pattern" > /dev/null; then
+              echo "::error::no dist/$pattern: the tag $TAG does not match pocketvina.__version__ (pocketvina/__init__.py)"
+              exit 1
+            fi
+          done
+      - name: Install the wheel into a fresh venv
+        # installing pocketvina itself compiles and downloads nothing (only its dependencies come from PyPI)
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install dist/pocketvina-*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/venv/bin/pocketvina" --version
+          "$RUNNER_TEMP/venv/bin/pocketvina" --help
+          "$RUNNER_TEMP/venv/bin/python" -c "from pocketvina import engine; print(engine.engine_path())"
+      - name: Checksums
+        run: |
+          {
+            echo "### Python packages"
+            echo '```'
+            (cd dist && sha256sum -- *)
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 90
+
+  conda:
+    name: conda packages (rattler-build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/rattler-build-action@v0.2.39
+        with:
+          rattler-build-version: v0.79.0
+          setup-only: "true"
+      - name: Build
+        # builds both outputs and runs their tests (recipe/README.md); channel conda-forge
+        run: |
+          rattler-build --version
+          rattler-build build --recipe recipe/ -c conda-forge --output-dir "$RUNNER_TEMP/conda-bld"
+      - name: Collect the packages
+        env:
+          TAG: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          # the output dir's channel folders <platform>/{<package>,repodata.json}: linux-64/pocketvina-engine-*,
+          # noarch/pocketvina-*. Kept as they are, the artifact is a local channel (a flat folder of packages is not
+          # one): unzip conda-packages.zip -d conda-packages
+          # && conda create -n pocketvina -c ./conda-packages -c conda-forge pocketvina ocl-icd-system
+          mkdir -p conda-packages
+          cp -r "$RUNNER_TEMP/conda-bld/linux-64" "$RUNNER_TEMP/conda-bld/noarch" conda-packages/
+          ls -lR conda-packages
+          version="[0-9]*"  # any version, but not "pocketvina-engine-..." for "pocketvina-..."
+          [ "$REF_TYPE" != tag ] || version=${TAG#v}
+          for name in pocketvina-engine pocketvina; do
+            if ! compgen -G "conda-packages/*/$name-$version-*" > /dev/null; then
+              if [ "$REF_TYPE" = tag ]; then
+                echo "::error::no $name-$version package: the version in recipe/recipe.yaml must be the tag $TAG without v"
+              else
+                echo "::error::rattler-build made no $name package"
+              fi
+              exit 1
+            fi
+          done
+          {
+            echo "### conda packages"
+            echo '```'
+            (cd conda-packages && sha256sum -- */*.conda)
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: conda-packages
+          path: conda-packages/
+          if-no-files-found: error
+          retention-days: 90
