@@ -1,6 +1,11 @@
-# PocketVina Atlas: docking results of drugs against the human proteome
+# PocketVina Atlas
 
-The [PocketVina Atlas](https://bimsbstatic.mdc-berlin.de/akalin/asarigun/pocketvina_atlas/) is a public collection of
+<p align="center">
+  <a href="https://bimsbstatic.mdc-berlin.de/akalin/asarigun/pocketvina_atlas/"><img src="https://img.shields.io/badge/PocketVina_Atlas-Database-0F766E?style-for-the-badge&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjIgMC41IDE5LjUgMjIuNSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNUVFQUQ0IiBzdHJva2Utd2lkdGg9IjIuMSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48Y2lyY2xlIGN4PSIxMSIgY3k9IjEwIiByPSI2LjIiLz48cGF0aCBkPSJNNC44IDEwaDEyLjQiLz48ZWxsaXBzZSBjeD0iMTEiIGN5PSIxMCIgcng9IjIuNSIgcnk9IjYuMiIvPjxwYXRoIGQ9Ik0xNi40IDNBOC45IDguOSAwIDAgMSA1LjcgMTcuMSIvPjxwYXRoIGQ9Ik0xMSAxOC45djIuNk03LjYgMjEuNWg2LjgiLz48L3N2Zz4K"/></a>
+  <a href="https://colab.research.google.com/github/BIMSBbioinfo/PocketVina/blob/main/notebooks/atlas_colab.ipynb"><img src="https://img.shields.io/badge/Google_Colab-Atlas-F9AB00?style-for-the-badge&logo=googlecolab"/></a>
+</p>
+
+The [PocketVina Atlas](https://bimsbstatic.mdc-berlin.de/akalin/asarigun/pocketvina_atlas/) is a public database of
 docking results computed in advance: a library of drugs docked with PocketVina against the whole human proteome (the
 AlphaFold models of human proteins). `pocketvina.Atlas` reads these results from Python. You can search them, rank
 them, look at a protein–drug pair in 3D, save its poses and download a part of the Atlas. You run no docking yourself,
@@ -14,18 +19,19 @@ To try it in your browser, open the
 ```python
 from pocketvina import Atlas
 
-atlas = Atlas()                                 # the public Atlas, read over the internet
-atlas.search("imatinib")                        # proteins and drugs that match, best first
-atlas.protein("ABL1")                           # the protein: gene, name, AlphaFold model, pockets
-atlas.drug("imatinib")                          # the drug's identifiers
-atlas.best_scores(protein="ABL1", top=20)       # the 20 drugs with the best Vina score on ABL1
-atlas.best_scores(ligand="imatinib", top=20)    # the 20 proteins imatinib scores best on
+atlas = Atlas()                               # the public Atlas, read over the internet
+atlas.search("imatinib")                      # matching proteins and drugs, best first
+atlas.protein("ABL1")                         # gene, name, AlphaFold model, pockets
+atlas.drug("imatinib")                        # the drug's identifiers
+atlas.best_scores(protein="ABL1", top=20)     # the 20 best drugs on ABL1
+atlas.best_scores(ligand="imatinib", top=20)  # the 20 best proteins of imatinib
 
-pair = atlas.select(protein="ABL1", ligand="imatinib", pocket="all")  # the best pose in every pocket
-pair.show()                                     # the 3D page with this pair selected
-pair.bust()                                     # PoseBusters checks of these poses
-pair.export()                                   # the poses as an SDF file
-pair.export_protein()                           # the protein as a PDB file
+# the best pose in every pocket of this protein-drug pair
+pair = atlas.select(protein="ABL1", ligand="imatinib", pocket="all")
+pair.show()                                   # the 3D page with this pair selected
+pair.bust()                                   # PoseBusters checks of these poses
+pair.export()                                 # the poses as an SDF file
+pair.export_protein()                         # the protein as a PDB file
 ```
 
 `select` and the pair's methods are the same as for your own docking results: see

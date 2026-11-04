@@ -4,8 +4,8 @@
 
 ### Added
 
-- `pocketvina.Atlas` reads the PocketVina Atlas: docking results of drugs against the human proteome, computed in
-  advance. It gives search, protein and drug identifiers, the best scores of a protein or a drug, and `select()` with
+- `pocketvina.Atlas` reads the PocketVina Atlas, a database of docking results of drugs against the human proteome,
+  computed in advance. It gives search, protein and drug identifiers, the best scores of a protein or a drug, and `select()` with
   the same `show()`, `bust()`, `export()` and `export_protein()` as for a run. `show()` draws a protein's page, and
   `download()` copies some proteins for offline use ([PocketVina Atlas](atlas.md)).
 - The `pocketvina atlas` command with `search`, `show`, `export` and `download` ([Command line reference](cli.md)).
