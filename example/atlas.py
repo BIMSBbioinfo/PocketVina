@@ -1,7 +1,8 @@
-"""Look up the PocketVina Atlas without docking (no GPU needed): python example/atlas.py
+"""The PocketVina Atlas from a script: python example/atlas.py
 
-It reads the public Atlas over the internet, or the folder or URL in $POCKETVINA_ATLAS. The files it writes go to the
-working folder. More: https://bioinformatics.mdc-berlin.de/PocketVina/atlas.html
+The Atlas holds docking results computed in advance (a library of drugs docked against the human proteome), so nothing
+is docked here and no GPU is needed. It reads the public Atlas over the internet, or the folder or URL in
+$POCKETVINA_ATLAS. The files it writes go to the working folder. More: https://bioinformatics.mdc-berlin.de/PocketVina/atlas.html
 """
 from pocketvina import Atlas
 

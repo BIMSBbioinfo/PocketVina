@@ -1,9 +1,10 @@
-# PocketVina Atlas: look up results without docking
+# PocketVina Atlas: docking results of drugs against the human proteome
 
-The [PocketVina Atlas](https://bimsbstatic.mdc-berlin.de/akalin/asarigun/pocketvina_atlas/) is a public set of
-PocketVina docking results: the drugs of a screening library docked into human proteins (their AlphaFold models).
-`pocketvina.Atlas` reads it from Python. You can search it, rank the results, look at a pair in 3D, save the poses and
-download a part of it. No GPU and no docking are needed. The website describes the data and how it was made.
+The [PocketVina Atlas](https://bimsbstatic.mdc-berlin.de/akalin/asarigun/pocketvina_atlas/) is a public collection of
+docking results computed in advance: a library of drugs docked with PocketVina against the whole human proteome (the
+AlphaFold models of human proteins). `pocketvina.Atlas` reads these results from Python. You can search them, rank
+them, look at a protein–drug pair in 3D, save its poses and download a part of the Atlas. You run no docking yourself,
+so no GPU is needed. The website describes the data and how it was made.
 
 To try it in your browser, open the
 [Colab notebook](https://colab.research.google.com/github/BIMSBbioinfo/PocketVina/blob/main/notebooks/atlas_colab.ipynb).

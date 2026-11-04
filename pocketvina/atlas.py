@@ -1,4 +1,4 @@
-"""The PocketVina Atlas from Python: docking results of human proteins x drugs, looked up without docking.
+"""The PocketVina Atlas from Python: docking results of drugs against the human proteome, computed in advance.
 
     from pocketvina import Atlas
     atlas = Atlas()                                # the public release (ATLAS_URL); Atlas("my_atlas"): a local copy

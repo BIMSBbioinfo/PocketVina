@@ -972,7 +972,7 @@ def _pair_options(f):
 
 @cli.group("atlas")
 def atlas_group():
-    """The PocketVina Atlas: docking results of drugs on human proteins, looked up without docking (in Python:
+    """The PocketVina Atlas: docking results of drugs against the human proteome, computed in advance (in Python:
     pocketvina.Atlas).
 
     PROTEIN is any identifier of a protein (gene, UniProt accession, entry name, Entrez, HGNC or Ensembl ID), LIGAND

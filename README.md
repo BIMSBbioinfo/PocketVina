@@ -66,7 +66,7 @@ papers are on the [citing page](https://bioinformatics.mdc-berlin.de/PocketVina/
 
 - [Quick start](https://bioinformatics.mdc-berlin.de/PocketVina/quickstart.html): dock the example proteins and ligands, then look at the results in 3D
 - [Google Colab notebook](https://colab.research.google.com/github/BIMSBbioinfo/PocketVina/blob/main/notebooks/quickstart_colab.ipynb)
-- [PocketVina Atlas](https://bioinformatics.mdc-berlin.de/PocketVina/atlas.html): look up docking results of the human proteome without docking
+- [PocketVina Atlas](https://bioinformatics.mdc-berlin.de/PocketVina/atlas.html): docking results of drugs against the whole human proteome, computed in advance; search, view and download them from Python
 - [Command line](https://bioinformatics.mdc-berlin.de/PocketVina/cli.html)
 - [Large screens on a cluster (SLURM)](https://bioinformatics.mdc-berlin.de/PocketVina/hpc.html)
 

@@ -34,8 +34,9 @@ Options given on the command line override the file. Relative paths are relative
 
 ## The PocketVina Atlas
 
-`pocketvina atlas` looks up the PocketVina Atlas without docking, as `pocketvina.Atlas` does in Python. It reads the
-public release, or the folder or URL given with `--atlas`:
+`pocketvina atlas` reads the [PocketVina Atlas](atlas.md), docking results of drugs against the human proteome
+computed in advance, as `pocketvina.Atlas` does in Python. It reads the public release, or the folder or URL given
+with `--atlas`:
 
 ```bash
 pocketvina atlas search imatinib
