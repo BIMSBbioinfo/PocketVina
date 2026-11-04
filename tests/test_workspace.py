@@ -338,7 +338,8 @@ def test_page_carries_data_and_viewer(res):
 
 def test_page_script_names_and_no_posebusters():
     """The page's own code: files and images named with PV_ (lib/keys.ts), the pose named so in Mol*'s hover box,
-    and no Atlas-only parts (ChEMBL, Open Targets: v0.3). PoseBusters shows only what the data holds."""
+    and no Atlas wording in the code (ChEMBL, Open Targets: an Atlas page brings those texts in its data). PoseBusters
+    shows only what the data holds."""
     js = (VIEWER / "workspace.js").read_text(encoding="utf-8")
     for part in ("const pairStem = () => `PV_${S.prot.name}_${ligOf(S.row).name}`;",
                  "const poseName = () => `${pairStem()}_pk${S.pk}_m${pad2(S.mode)}`;",
@@ -422,6 +423,17 @@ def test_show_writes_a_file_outside_a_notebook(res, results_dir, tmp_path, monke
     monkeypatch.setattr(workspace, "in_notebook", lambda: True)
     assert res.show(path=tmp_path / "sub" / "x.html", molstar="url") == str(tmp_path / "sub" / "x.html")
     assert len((tmp_path / "sub" / "x.html").read_text(encoding="utf-8")) < 400_000
+
+
+def test_selection_show_lists_as_results_show(res, tmp_path):
+    """pair.show() lists as many ligands as Results.show: MAX_LIGANDS by default (a pair of the PocketVina Atlas has
+    its own default), the number given, or all with None; the pair itself always."""
+    sel = res.select(PID, "molecule5")
+    for kwargs, want in (({}, workspace.MAX_LIGANDS), (dict(max_ligands=1), 1), (dict(max_ligands=None), None)):
+        data = workspace.page_payload(Path(sel.show(path=tmp_path / "x.html", **kwargs)).read_text(encoding="utf-8"))
+        assert data["maxLigands"] == want
+        assert data == json.loads(json.dumps(workspace.workspace_data(res, [PID], max_ligands=want, selection=sel)))
+        assert sel.ligand_idx in [r["lig"] for r in data["proteins"][0]["rows"]]
 
 
 def test_show_warns_about_a_large_page(res, tmp_path, monkeypatch, caplog):

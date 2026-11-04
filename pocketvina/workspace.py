@@ -7,8 +7,15 @@ beside the tabs Top hits, Selected pair and Pockets, rebuilt in plain JavaScript
 Every pose the page can show is in it (the PDBQT output of every docked pocket of each listed ligand, its best pose as
 SDF), with the protein structures, the P2Rank pockets and a 2D drawing of each ligand, so it works offline, in a
 saved notebook and on Colab. The data (``workspace_data``) and the viewer's code are gzip-compressed and base64-encoded
-in the page; the browser unpacks them (DecompressionStream). No PoseBusters results are shown (they are optional:
-``Selection.bust`` runs them). See ``pocketvina/viewer/README.md`` for the files and the changes to the site's code.
+in the page; the browser unpacks them (DecompressionStream). PoseBusters results are shown only where the results
+directory has them (PoseBusters is optional: ``pocketvina bust`` stores them, ``Selection.bust`` runs it in memory).
+See ``pocketvina/viewer/README.md`` for the files and the changes to the site's code.
+
+``Atlas.show`` and ``Selection.show`` of a pair of the PocketVina Atlas build the same page from the Atlas
+(``pocketvina.atlas``), in the same data format with a few more fields, which a page of results does not have: the
+protein's information (``info``), the pockets' pLDDT, the drugs' identifiers (``ids``) and the text above Top hits
+(``topNote``: they are the site's Top hits, the drugs with a PoseBusters-valid pose); each listed pair's PoseBusters
+result (``pb``, of its highest-affinity pose) is the one the Atlas stores.
 
 In Jupyter, Colab or VSCode the page is shown as an iframe (``srcdoc``) below the cell, with a line saying to run the
 cell again where the iframe is not drawn (``NotebookView``); elsewhere it is written to an HTML file whose path is
@@ -47,9 +54,10 @@ HEIGHT = 760  # px of the notebook iframe
 # a page above this size (characters) gets a warning: every protein and up to max_ligands ligands each are in it, and
 # a browser or a notebook (which also saves it) becomes slow with a page of many proteins
 LARGE_PAGE = 30_000_000
-# the notebook iframe: its own origin (it cannot reach the notebook page), scripts, and downloads (Save image, the pose
-# files), which a sandboxed frame may start only with allow-downloads
-SANDBOX = "allow-scripts allow-downloads"
+# the notebook iframe: its own origin (it cannot reach the notebook page), scripts, downloads (Save image, the pose
+# files), which a sandboxed frame may start only with allow-downloads, and links that open in a new tab (an Atlas
+# page links to UniProt, AlphaFold DB, ChEMBL and Open Targets), which load there without the sandbox
+SANDBOX = "allow-scripts allow-downloads allow-popups allow-popups-to-escape-sandbox"
 # the features the page and its 3D frame may use: Mol* asks whether WebXR is there (a frame not allowed it logs a
 # permissions policy error), and full screen
 FRAME_ALLOW = "xr-spatial-tracking *; fullscreen *"
@@ -435,17 +443,35 @@ def _protein_list(res: Results, protein) -> List[str]:
     return list(dict.fromkeys(pids))
 
 
+def _check_options(molstar: str, theme: str, height, max_ligands):
+    """The page options of a show(), checked: (height, max_ligands)."""
+    if molstar not in MOLSTAR_SOURCES:
+        raise ValueError(f"molstar must be one of {MOLSTAR_SOURCES}, got {molstar!r}")
+    if theme not in THEMES:
+        raise ValueError(f"theme must be one of {THEMES}, got {theme!r}")
+    return _check_int("height", height), _check_int("max_ligands", max_ligands, allow_none=True)
+
+
+def _output(page: str, name: str, path, height: int) -> Optional[str]:
+    """Show a page: below the cell in a notebook (returns None), else written to ``path`` (default: ``<name>.html`` in
+    the working folder) whose path is returned. ``path`` given: always written there."""
+    if path is None and in_notebook():
+        from IPython.display import display
+
+        display(NotebookView(page, height))
+        return None
+    target = _write(path if path is not None else os.path.join(os.getcwd(), f"{name}.html"), page)
+    if path is None:
+        print(f"PocketVina view written to {target}: open it in a web browser.")
+    return target
+
+
 def show(res: Results, protein=None, *, selection: Optional[Selection] = None, path=None, molstar: str = "inline",
          theme: str = "auto", height: int = HEIGHT, max_ligands: Optional[int] = MAX_LIGANDS) -> Optional[str]:
     """Build the page for ``protein`` (an id, a list of ids, or None: every protein, with a protein menu) and show
     it: below the cell in a notebook (returns None), else written to ``path`` (default: ``PV_<protein>.html``, or
     ``<selection name>.html``, in the working folder) whose path is returned. ``path`` given: always written there."""
-    if molstar not in MOLSTAR_SOURCES:
-        raise ValueError(f"molstar must be one of {MOLSTAR_SOURCES}, got {molstar!r}")
-    if theme not in THEMES:
-        raise ValueError(f"theme must be one of {THEMES}, got {theme!r}")
-    height = _check_int("height", height)
-    max_ligands = _check_int("max_ligands", max_ligands, allow_none=True)
+    height, max_ligands = _check_options(molstar, theme, height, max_ligands)
     pids = _protein_list(res, protein)
     data = workspace_data(res, pids, max_ligands=max_ligands, selection=selection)
     for p in data["proteins"]:
@@ -464,15 +490,7 @@ def show(res: Results, protein=None, *, selection: Optional[Selection] = None, p
                        "smaller",
                        len(page) / 1e6, len(pids), "" if len(pids) == 1 else "s",
                        "all" if max_ligands is None else max_ligands)
-    if path is None and in_notebook():
-        from IPython.display import display
-
-        display(NotebookView(page, height))
-        return None
-    target = _write(path if path is not None else os.path.join(os.getcwd(), f"{name}.html"), page)
-    if path is None:
-        print(f"PocketVina view written to {target}: open it in a web browser.")
-    return target
+    return _output(page, name, path, height)
 
 
 __all__ = ["show", "workspace_data", "workspace_html", "iframe", "NotebookView", "in_notebook", "ligand_svg",

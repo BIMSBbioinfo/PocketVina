@@ -86,6 +86,7 @@ pythonpath = ["."]
 addopts = "-ra"
 markers = [
     "gpu: needs a GPU and the real engine; skipped unless POCKETVINA_GPU_TESTS=1",
+    "network: reads the public PocketVina Atlas over the internet; skipped unless POCKETVINA_NETWORK_TESTS=1",
 ]
 # test/ and scripts_test/ are scratch folders, not test suites
 norecursedirs = [

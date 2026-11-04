@@ -59,9 +59,10 @@ bin/
 .venv/
 conda-bld/
 
-# files the quickstart notebook writes when run in a checkout
+# files the notebooks write when run in a checkout
 notebooks/proteins.txt
 notebooks/PV_*
+notebooks/my_atlas/
 notebooks/pocketvina_quickstart/
 notebooks/__pycache__/
 

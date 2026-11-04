@@ -3,10 +3,12 @@
 <p align="center">
   <a href="https://www.arxiv.org/abs/2506.20043"><img src="https://img.shields.io/badge/arXiv-preprint-B31B1B?style-for-the-badge&logo=arXiv"/></a>
   <a href="https://bioinformatics.mdc-berlin.de/PocketVina/"><img src="https://img.shields.io/badge/Docs-Documentation-0A7BBB?style-for-the-badge&logo=readme"/></a>
+  <a href="https://bimsbstatic.mdc-berlin.de/akalin/asarigun/pocketvina_atlas/"><img src="https://img.shields.io/badge/PocketVina_Atlas-Database-0F766E?style-for-the-badge&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjIgMC41IDE5LjUgMjIuNSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNUVFQUQ0IiBzdHJva2Utd2lkdGg9IjIuMSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48Y2lyY2xlIGN4PSIxMSIgY3k9IjEwIiByPSI2LjIiLz48cGF0aCBkPSJNNC44IDEwaDEyLjQiLz48ZWxsaXBzZSBjeD0iMTEiIGN5PSIxMCIgcng9IjIuNSIgcnk9IjYuMiIvPjxwYXRoIGQ9Ik0xNi40IDNBOC45IDguOSAwIDAgMSA1LjcgMTcuMSIvPjxwYXRoIGQ9Ik0xMSAxOC45djIuNk03LjYgMjEuNWg2LjgiLz48L3N2Zz4K"/></a>
   <a href="https://pypi.org/project/pocketvina/"><img src="https://img.shields.io/pypi/v/pocketvina?label=PyPI&color=3775A9&logo=pypi&logoColor=white"/></a>
   <a href="https://hub.docker.com/r/asarigun/pocketvina"><img src="https://img.shields.io/badge/Docker-Image-2496ED?style-for-the-badge&logo=docker"/></a>
   <a href="https://www.youtube.com/watch?v=n8-YKOTvHGs"><img src="https://img.shields.io/badge/YouTube-UI Demo-FF0000?style-for-the-badge&logo=youtube"/></a>
   <a href="https://colab.research.google.com/github/BIMSBbioinfo/PocketVina/blob/main/notebooks/quickstart_colab.ipynb"><img src="https://img.shields.io/badge/Google_Colab-Tutorial-F9AB00?style-for-the-badge&logo=googlecolab"/></a>
+  <a href="https://colab.research.google.com/github/BIMSBbioinfo/PocketVina/blob/main/notebooks/atlas_colab.ipynb"><img src="https://img.shields.io/badge/Google_Colab-Atlas-F9AB00?style-for-the-badge&logo=googlecolab"/></a>
   <a href="https://zenodo.org/records/15733460"><img src="https://img.shields.io/badge/Zenodo-Dataset & Raw Results-1682D4?style-for-the-badge&logo=zenodo"/></a>
   <a href="https://isocpp.org/"><img src="https://img.shields.io/badge/C++-11.4.0-00599C?style-for-the-badge&logo=cplusplus"/></a>
   <a href="https://gcc.gnu.org/"><img src="https://img.shields.io/badge/C-11.4.0-3C2179?style-for-the-badge&logo=c"/></a>
@@ -66,13 +68,14 @@ papers are on the [citing page](https://bioinformatics.mdc-berlin.de/PocketVina/
 
 - [Quick start](https://bioinformatics.mdc-berlin.de/PocketVina/quickstart.html): dock the example proteins and ligands, then look at the results in 3D
 - [Google Colab notebook](https://colab.research.google.com/github/BIMSBbioinfo/PocketVina/blob/main/notebooks/quickstart_colab.ipynb)
+- [PocketVina Atlas](https://bioinformatics.mdc-berlin.de/PocketVina/atlas.html): a database of docking results of drugs against the whole human proteome, computed in advance; search, view and download them from Python
 - [Command line](https://bioinformatics.mdc-berlin.de/PocketVina/cli.html)
 - [Large screens on a cluster (SLURM)](https://bioinformatics.mdc-berlin.de/PocketVina/hpc.html)
 
 ## Benchmarks
 
 The benchmark data and results are on [Zenodo](https://zenodo.org/records/15733460). The code to reproduce them is in
-[benchmark/](benchmark/).
+[benchmark/](benchmark/README.md).
 
 ## Documentation
 

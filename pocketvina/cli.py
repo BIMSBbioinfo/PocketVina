@@ -12,11 +12,16 @@ queries of a results directory, the import of legacy runs, a GPU benchmark and t
     pocketvina export --results results --what best --format sdf --out poses
     pocketvina import-legacy output --results results --smiles ligands.csv
     pocketvina bench gpu --protein 1fbl.pdb --ligands ligands.csv --procs 1,2,3 --out bench
+    pocketvina atlas search imatinib                      # the PocketVina Atlas (pocketvina.atlas.Atlas)
+    pocketvina atlas show ABL1 --ligand imatinib --out ABL1_imatinib.html
+    pocketvina atlas export ABL1 imatinib --fmt sdf --protein --out poses
+    pocketvina atlas download ABL1 EGFR --out my_atlas
 
 Exit codes: 0 ok, 1 usage or configuration error, 2 partial failure (some proteins or engine calls failed), 3 nothing
 docked. The modules that need pyarrow, DuckDB, PoseBusters or a viewer are imported by the commands that use them, so
 ``dock --format files`` works without pyarrow.
 """
+import ast
 import contextlib
 import dataclasses
 import json
@@ -25,6 +30,7 @@ import math
 import os
 import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -79,6 +85,8 @@ BUST_SELECT = ("best", "top_k", "per_pocket")  # bust.SELECT (bust imports pyarr
 EXPORT_WHAT = ("best", "all")
 EXPORT_FORMATS = ("sdf", "pdbqt", "csv")
 VIEW_BACKENDS = ("auto", "molstar", "py3dmol")
+ATLAS_SEARCH_TOP = 20  # atlas.SEARCH_TOP (pocketvina.atlas imports pandas: only the atlas commands import it)
+ATLAS_EXPORT_FORMATS = ("sdf", "pdbqt")  # selection.EXPORT_FORMATS
 BENCH_CSV = "bench_gpu.csv"
 BENCH_JSON = "bench_gpu.json"
 BENCH_COLUMNS = ("procs", "wall_s", "ligands_docked", "ligands_per_hour", "speedup", "proc_runtime_s", "s_per_ligand",
@@ -126,15 +134,16 @@ def _message(e: BaseException) -> str:
 
 
 @contextlib.contextmanager
-def _user_errors():
+def _user_errors(also: tuple = ()):
     """Errors of the inputs or settings (a bad value, a missing file, protein or ligand, a missing optional package)
-    as a message and exit code 1 instead of a traceback; ``-v`` prints the traceback too."""
+    as a message and exit code 1 instead of a traceback; ``-v`` prints the traceback too. ``also``: more exception
+    types to report so (the atlas commands: OSError, e.g. no connection to the Atlas)."""
     try:
         yield
     except click.ClickException:
         raise
     except (ValueError, KeyError, ImportError, FileNotFoundError, NotADirectoryError, IsADirectoryError,
-            PermissionError) as e:
+            PermissionError, *also) as e:
         ctx = click.get_current_context(silent=True)
         if ctx is not None and (ctx.find_object(dict) or {}).get("log_level") == logging.DEBUG:
             click.echo(traceback.format_exc(), err=True, nl=False)
@@ -898,6 +907,162 @@ def import_legacy(ctx, output_dir, results, smiles, tmp_dir, gzip_level, force):
         with Results(path) as res:
             n = len(res.proteins())
     click.echo(f"{path}: {n} proteins")
+
+
+# --- the PocketVina Atlas ------------------------------------------------------------------------------------------
+
+class _NumberOrAll(click.ParamType):
+    """A pocket or mode number (1, 2, ...) or 'all'."""
+
+    name = "N|all"
+
+    def convert(self, value, param, ctx):
+        text = str(value).strip().lower()
+        if text == "all":
+            return "all"
+        if text.isdigit() and int(text) >= 1:
+            return int(text)
+        self.fail(f"{value!r} is not a number (1, 2, ...) or 'all'", param, ctx)
+
+
+def _atlas_option(f):
+    return click.option("--atlas", "location", metavar="PATH_OR_URL",
+                        help="The Atlas: a release folder (e.g. one written by `pocketvina atlas download`) or its "
+                             "URL.  [default: $POCKETVINA_ATLAS, else the public release]")(f)
+
+
+def _atlas(location):
+    from .atlas import Atlas
+
+    return Atlas(location)
+
+
+# the Python hints in the Atlas's error messages, as the atlas commands say them
+_ATLAS_SEARCH_HINT = re.compile(r"atlas\.search\(('(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\")\)")
+_ATLAS_HINTS = ((re.compile(r"Atlas\('([^']*)'\)"), r"--atlas \1"),
+                (re.compile(r"Atlas\(\) for the public release"), "no --atlas for the public release"),
+                (re.compile(r"Atlas\(\) reads every protein"), "The public release (no --atlas) has every protein"),
+                (re.compile(r"\bdownload\(\)"), "pocketvina atlas download"),
+                (re.compile(r"\bfmt='(\w+)'"), r"--fmt \1"))
+
+
+@contextlib.contextmanager
+def _atlas_errors(location):
+    """``_user_errors`` for the atlas commands: also OSError (e.g. no connection to the Atlas), and the hints of the
+    messages name the command line ("pocketvina atlas search ABL", "--atlas PATH", "--fmt pdbqt"), not Python."""
+    try:
+        with _user_errors(also=(OSError,)):
+            yield
+    except CliError as e:
+        where = f" --atlas {shlex.quote(location)}" if location else ""
+        e.message = _ATLAS_SEARCH_HINT.sub(
+            lambda m: f"pocketvina atlas search {shlex.quote(ast.literal_eval(m.group(1)))}{where}", e.message)
+        for python, command_line in _ATLAS_HINTS:
+            e.message = python.sub(command_line, e.message)
+        raise
+
+
+def _pair_options(f):
+    f = click.option("--mode", type=_NumberOrAll(), metavar="N|all",
+                     help="A mode, or 'all'.  [default: 1, the best mode of the pocket]")(f)
+    return click.option("--pocket", type=_NumberOrAll(), metavar="N|all",
+                        help="A pocket (P2Rank rank), or 'all': each pocket.  [default: the pocket of the best "
+                             "pose]")(f)
+
+
+@cli.group("atlas")
+def atlas_group():
+    """The PocketVina Atlas: docking results of drugs against the human proteome, computed in advance (in Python:
+    pocketvina.Atlas).
+
+    PROTEIN is any identifier of a protein (gene, UniProt accession, entry name, Entrez, HGNC or Ensembl ID), LIGAND
+    any identifier of a drug (name, synonym, PVL ID, ChEMBL ID, catalogue number, InChIKey or SMILES).
+    """
+
+
+@atlas_group.command("search")
+@click.argument("query")
+@click.option("--top", type=click.IntRange(0), default=ATLAS_SEARCH_TOP, show_default=True, help="Number of rows.")
+@_atlas_option
+@click.pass_context
+def atlas_search(ctx, query, top, location):
+    """Print the proteins and drugs whose identifiers match QUERY (also the start or part of a name), best match
+    first: kind, id (UniProt accession or PVL ID), name, the identifier that matched and its text."""
+    _setup_logging(ctx)
+    with _atlas_errors(location):
+        df = _atlas(location).search(query, top=top)
+    _echo_table(df)
+
+
+@atlas_group.command("show")
+@click.argument("protein")
+@click.option("--ligand", help="A drug: the page with this pair selected.")
+@_pair_options
+@click.option("--out", type=click.Path(dir_okay=False),
+              help="HTML file to write.  [default: PV_<UniProt>.html, or the pair's file name, here]")
+@_atlas_option
+@click.pass_context
+def atlas_show(ctx, protein, ligand, pocket, mode, out, location):
+    """Write the protein's page as an HTML file and print its path: the 3D view beside its best drugs (Top hits),
+    Selected pair, Pockets and Download, with the protein's information. --ligand selects a pair (--pocket and --mode
+    its poses)."""
+    _setup_logging(ctx)
+    if ligand is None and (pocket is not None or mode is not None):
+        raise click.UsageError("--pocket and --mode need --ligand (they pick poses of a pair)")
+    with _atlas_errors(location):
+        from .selection import name_part
+
+        atlas = _atlas(location)
+        if ligand is None:
+            uniprot = atlas._uniprot(protein)
+            path = atlas.show(uniprot, path=out or f"PV_{name_part(uniprot)}.html")
+        else:
+            pair = atlas.select(protein, ligand, pocket=pocket, mode=1 if mode is None else mode)
+            path = pair.show(path=out or f"{pair.name}.html")
+    click.echo(path)
+
+
+@atlas_group.command("export")
+@click.argument("protein")
+@click.argument("ligand")
+@_pair_options
+@click.option("--fmt", type=click.Choice(ATLAS_EXPORT_FORMATS), default="sdf", show_default=True,
+              help="sdf, or pdbqt (the docked models as the engine wrote them).")
+@click.option("--protein", "with_protein", is_flag=True,
+              help="Also write the protein (the AlphaFold model the drugs were docked into) as a PDB file.")
+@click.option("--out", type=click.Path(),
+              help="File (.sdf or .pdbqt) or folder to write into.  [default: the pair's file name, here]")
+@_atlas_option
+@click.pass_context
+def atlas_export(ctx, protein, ligand, pocket, mode, fmt, with_protein, out, location):
+    """Write poses of a protein x drug pair (by default its best pose) into one SDF or PDBQT file, and print its
+    path; --protein also writes the protein."""
+    _setup_logging(ctx)
+    with _atlas_errors(location):
+        pair = _atlas(location).select(protein, ligand, pocket=pocket, mode=1 if mode is None else mode)
+        if out is not None and not os.path.splitext(out)[1]:
+            os.makedirs(out, exist_ok=True)  # a folder
+        paths = [pair.export(out, fmt=fmt)]
+        if with_protein:
+            paths.append(pair.export_protein(os.path.dirname(paths[0])))
+    for path in paths:
+        click.echo(path)
+
+
+@atlas_group.command("download")
+@click.argument("proteins", nargs=-1, required=True)
+@click.option("--out", required=True, type=click.Path(file_okay=False),
+              help="Folder to write: a new one, or one written by an earlier download (it is completed).")
+@_atlas_option
+@click.pass_context
+def atlas_download(ctx, proteins, out, location):
+    """Download what the Atlas has on PROTEINS into a folder that --atlas FOLDER (and Python's Atlas(FOLDER)) reads
+    offline, and print its path. The size is printed before it starts; the files are checked against the release's
+    sha256."""
+    _setup_logging(ctx)
+    with _atlas_errors(location):
+        path = _atlas(location).download(list(proteins), out)
+    click.echo(path)
 
 
 # --- setup ---------------------------------------------------------------------------------------------------------

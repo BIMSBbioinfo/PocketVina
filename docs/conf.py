@@ -64,7 +64,8 @@ html_theme_options = {
     "source_branch": "main",
     "source_directory": "docs/",
 }
-# the example 3D pages of visualisation.md (written by show() for the quick start run)
+# the example 3D pages of visualisation.md (written by show() for the quick start run) and of atlas.md (by
+# Atlas.show() on the test fixture)
 html_static_path = ["_static"]
 pygments_style = "sphinx"
 pygments_dark_style = "monokai"
@@ -77,7 +78,10 @@ FIELD_DOCSTRINGS = {
     "pocketvina.main.PocketVinaConfig",
     *(f"pocketvina.main.PocketVinaGPU.{m}" for m in ("best_scores", "select", "show")),
     *(f"pocketvina.io.results.Results.{m}" for m in ("best_scores", "select", "show")),
-    *(f"pocketvina.selection.Selection.{m}" for m in ("show", "bust", "export")),
+    *(f"pocketvina.selection.Selection.{m}" for m in ("show", "bust", "export", "export_protein")),
+    "pocketvina.atlas.Atlas",
+    *(f"pocketvina.atlas.Atlas.{m}" for m in ("protein", "search", "drug", "best_scores", "select", "show",
+                                              "download")),
 }
 _FIELD_ITEM = re.compile(r"^([A-Za-z_]\w*(?:, [A-Za-z_]\w*)*): (\S.*)$")
 # a "*" that starts a file pattern in click help ("*.pdb"), not emphasis

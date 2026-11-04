@@ -1,7 +1,7 @@
 # Python API
 
-You can import the configuration classes, `PocketVinaGPU`, `P2RankProcessor` and `Results` directly from
-`pocketvina`.
+You can import the configuration classes, `PocketVinaGPU`, `P2RankProcessor`, `Results` and `Atlas` directly
+from `pocketvina`.
 
 ## Configuration and runs
 
@@ -48,7 +48,22 @@ that are done.
 
 ```{eval-rst}
 .. autoclass:: pocketvina.selection.Selection
-   :members: show, bust, export, poses, name
+   :members: show, bust, export, export_protein, poses, name
+```
+
+## PocketVina Atlas
+
+{class}`~pocketvina.atlas.Atlas` reads the PocketVina Atlas, from the public release or from a downloaded folder
+([PocketVina Atlas](atlas.md)). Its `select()` gives a {class}`~pocketvina.selection.Selection`. The identifiers
+that `protein=` and `ligand=` take are listed in [Identifiers](atlas.md#identifiers).
+
+```{eval-rst}
+.. autoclass:: pocketvina.atlas.Atlas
+   :members: search, protein, drug, best_scores, select, show, download
+
+.. autoclass:: pocketvina.atlas.ProteinInfo
+
+.. autoclass:: pocketvina.atlas.DrugInfo
 ```
 
 ## PoseBusters

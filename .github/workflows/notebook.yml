@@ -2,8 +2,9 @@ name: Notebook
 
 # Runs notebooks/quickstart_colab.ipynb from start to end on Colab's Python (tests/test_notebook.py): headless with
 # nbclient, the fake engine (tests/fake_engine.py) instead of the GPU and the fixture P2Rank pockets of tests/data
-# instead of P2Rank. ci.yml runs the same test on Python 3.9 to 3.12. Only on main (when the notebook or what it runs
-# changes), v* tags and manual runs.
+# instead of P2Rank. notebooks/atlas_colab.ipynb runs too, on the Atlas fixture of tests/data instead of the internet.
+# ci.yml runs the same test on Python 3.9 to 3.12. Only on main (when a notebook or what it runs changes), v* tags and
+# manual runs.
 on:
   push:
     branches: [main]
