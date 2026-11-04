@@ -32,6 +32,19 @@ pocketvina dock --config run.toml
 
 Options given on the command line override the file. Relative paths are relative to the folder of the file.
 
+## The PocketVina Atlas
+
+`pocketvina atlas` looks up the PocketVina Atlas without docking, as `pocketvina.Atlas` does in Python. It reads the
+public release, or the folder or URL given with `--atlas`:
+
+```bash
+pocketvina atlas search imatinib
+pocketvina atlas show ABL1 --ligand imatinib --out ABL1_imatinib.html
+pocketvina atlas export ABL1 imatinib --pocket all --fmt sdf --protein --out poses
+pocketvina atlas download ABL1 EGFR --out my_atlas
+pocketvina atlas search ABL1 --atlas my_atlas
+```
+
 ## Commands
 
 ```{eval-rst}

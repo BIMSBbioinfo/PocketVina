@@ -440,7 +440,9 @@ def test_runs_without_wrapper(tmp_path, fake_engine_path, options):
 # --- fixture data --------------------------------------------------------------------------------------------------
 
 def test_fixture_layout_and_size(data_dir, real_run, example_dir):
-    total = sum(p.stat().st_size for p in data_dir.rglob("*") if p.is_file())
+    # the run fixture; the Atlas fixture (data/atlas/) has its own size check in test_atlas.py
+    atlas = data_dir / "atlas"
+    total = sum(p.stat().st_size for p in data_dir.rglob("*") if p.is_file() and atlas not in p.parents)
     assert total < 500 * 1024
     for path in [real_run.receptor, real_run.pockets_csv, real_run.combined_csv, real_run.combined_json,
                  real_run.smiles_csv, *real_run.outputs(), *(real_run.ligand_pdbqt(n) for n in real_run.ligands)]:

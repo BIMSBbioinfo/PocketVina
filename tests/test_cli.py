@@ -46,7 +46,9 @@ PID = "AF-Q96LA5-F1-model_v4"
 LIGANDS = ("molecule1", "molecule2")
 COMMANDS = (("dock", "--proteins"), ("bust", "--select"), ("show", "--ligand"), ("export", "--what"),
             ("info", "--json"), ("query", "--csv"), ("import-legacy", "--smiles"), ("bench", "gpu"),
-            ("bench gpu", "--n-ligands"), ("setup", "p2rank"), ("setup p2rank", "--from"))
+            ("bench gpu", "--n-ligands"), ("setup", "p2rank"), ("setup p2rank", "--from"), ("atlas", "download"),
+            ("atlas search", "--top"), ("atlas show", "--ligand"), ("atlas export", "--fmt"),
+            ("atlas download", "--out"))
 OOM_LINE = "Err-4:CL_MEM_OBJECT_ALLOCATION_FAILURE"
 
 

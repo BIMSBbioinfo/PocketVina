@@ -77,7 +77,10 @@ FIELD_DOCSTRINGS = {
     "pocketvina.main.PocketVinaConfig",
     *(f"pocketvina.main.PocketVinaGPU.{m}" for m in ("best_scores", "select", "show")),
     *(f"pocketvina.io.results.Results.{m}" for m in ("best_scores", "select", "show")),
-    *(f"pocketvina.selection.Selection.{m}" for m in ("show", "bust", "export")),
+    *(f"pocketvina.selection.Selection.{m}" for m in ("show", "bust", "export", "export_protein")),
+    "pocketvina.atlas.Atlas",
+    *(f"pocketvina.atlas.Atlas.{m}" for m in ("protein", "search", "drug", "best_scores", "select", "show",
+                                              "download")),
 }
 _FIELD_ITEM = re.compile(r"^([A-Za-z_]\w*(?:, [A-Za-z_]\w*)*): (\S.*)$")
 # a "*" that starts a file pattern in click help ("*.pdb"), not emphasis

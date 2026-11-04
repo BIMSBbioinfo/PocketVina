@@ -21,6 +21,7 @@ on a free GPU. To cite PocketVina and the tools it builds on, see [Citing and ac
 installation
 quickstart
 visualisation
+atlas
 posebusters
 output-format
 gpu-sharing
@@ -35,7 +36,6 @@ faq
 
 cli
 api
-benchmarks
 changelog
 citing
 ```

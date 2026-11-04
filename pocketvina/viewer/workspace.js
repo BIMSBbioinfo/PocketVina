@@ -2,10 +2,16 @@
 /* PocketVina workspace (pocketvina/workspace.py, README.md): the PocketVina Atlas website's protein page (components/ProteinWorkspace.tsx,
  * Viewer.tsx and cells.tsx, file names from lib/keys.ts; commit 40e8d59) rebuilt in plain JavaScript for a self-contained page: the 3D
  * view (viewer.js of the site in a frame, see bridge.js) with its legend and protein style buttons, the pocket chips, Reset view and
- * Save image under it, beside the tabs Top hits, Selected pair and Pockets; a protein menu when the page holds several proteins. No
- * PoseBusters, ChEMBL, ATC or Open Targets parts. The page's data (workspace.py: workspace_data) and the frame's code are in the
- * script elements #pv-data and #pv-assets (JSON, gzip, base64). Every pose is in the data: no request is made (with
- * molstar="url" the frame loads the Mol* bundle from the Atlas website).
+ * Save image under it, beside the tabs Top hits, Selected pair and Pockets; a protein menu when the page holds several proteins. The
+ * page's data (workspace.py: workspace_data) and the frame's code are in the script elements #pv-data and #pv-assets (JSON, gzip,
+ * base64). Every pose is in the data: no request is made (with molstar="url" the frame loads the Mol* bundle from the Atlas website).
+ * A page of the PocketVina Atlas (atlas.py: Atlas._page) has optional fields, drawn only when present, with their wording in the data:
+ * the protein's information (P.info: title, name, links, facts under Annotations, associated diseases with their scores; the site's
+ * protein header, app/protein/[id]/page.tsx and components/OpenTargets.tsx), the pockets' pLDDT (a column in Pockets), the ligands'
+ * identifiers (L.ids: rows of label, value, link, tooltip, short text of a collapsed row; ChEMBL ID, ATC, synonyms) and the stored
+ * PoseBusters result of each pair's highest-affinity pose (r.pb); the text above Top hits (P.topNote: its rows are the site's Top hits,
+ * the PoseBusters-valid drugs; r.rank counts the drugs and is null for a row that is not ranked) and the protein named by its gene in
+ * the texts (P.info.title). Links open in a new tab (target=_blank, rel=noopener noreferrer), only http(s) addresses.
  * Test hooks: window.__pvState() (what is selected and shown), __pvViewerLog (viewer-ready / -frame / -drawn), __pocketvinaDraws,
  * __pvLastImage (the last image saved: name, width, height, scale, bytes) and __pvFrame (the 3D frame element). */
 (() => {
@@ -34,6 +40,9 @@
   const int = x => (x == null ? '–' : Number(x).toLocaleString('en-US'));
   const pad2 = m => String(m).padStart(2, '0');
   const byNum = (a, b) => a - b;
+  // a link of the data (Atlas pages) in a new tab; text only for anything but an http(s) address
+  const extLink = (href, html, cls = 'link') => (/^https?:\/\//i.test(String(href || ''))
+    ? `<a class="${cls}" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${html}</a>` : html);
 
   // ------------------------------------------------------------ data: JSON, gzip, base64 (workspace.py _pack)
   async function unpack(id) {
@@ -57,6 +66,7 @@
     status: 'Loading 3D…', framed: false, drawn: false, legendOpen: true, imgScale: 2, imgTransparent: false, imageBusy: false,
   };
   const ligOf = r => D.ligands[String(r.lig)];
+  const protName = P => (P.info && P.info.title) || P.id;          // the protein in texts: its gene on an Atlas page (the site's wording)
   const pocketOf = (r, k) => (r && r.pockets.find(p => p.rank === k)) || null;
   const bestIn = p => Math.min(...p.modes.map(m => m[0]));
   const poseKey = () => (S.row ? `${S.row.lig}:${S.view}:${S.pk}:${S.mode}` : '');
@@ -230,6 +240,7 @@
   function layout() {
     root.innerHTML = `<header class="pv-head"><span class="pv-brand">PocketVina</span><span id="pv-proteins"></span><span class="pv-title" id="pv-title"></span>`
       + `<button type="button" class="btn" data-act="theme" id="pv-theme"></button></header>`
+      + (D.proteins.some(p => p.info) ? `<div class="pv-info" id="pv-info"></div>` : '')
       + `<div class="pv-main"><div class="pv-left"><div class="pv-viewer" id="pv-viewer"><span class="pv-status" id="pv-status" role="status"></span>`
       + `<div class="pv-overlay" id="pv-overlay"></div></div><div class="pv-chips" id="pv-chips"></div></div>`
       + `<div class="pv-panel"><div class="pv-tabs" role="tablist" aria-label="Panels" id="pv-tabs"></div><div class="pv-body" id="pv-body"></div></div></div>`
@@ -247,6 +258,24 @@
       `<option value="${esc(p.id)}"${p === S.prot ? ' selected' : ''}>${esc(p.id)} (${int(p.n)} ligands)</option>`).join('')}</select></label>` : `<b>${esc(S.prot.id)}</b>`);
     set($('pv-title'), S.row ? `${esc(ligOf(S.row).id)} · ${S.view === 'best' ? 'highest-affinity pose' : `pocket ${S.pk}, mode ${S.mode}`}` : '');
     $('pv-theme').textContent = S.theme === 'dark' ? 'Light theme' : 'Dark theme';
+  }
+  // the protein's information (Atlas pages): title, name and links in one line, then Annotations and the associated diseases, each a
+  // panel that opens over the page (the site's protein header)
+  function renderInfo() {
+    const el = $('pv-info'); if (!el) return;
+    const I = S.prot.info;
+    el.hidden = !I;
+    if (!I) { set(el, ''); return; }
+    const pop = (attr, label, body) => `<details class="pv-pop" ${attr}><summary>${label}<span class="pv-chev">${ICON.down}</span></summary><div class="pv-pop-body">${body}</div></details>`;
+    const facts = (I.facts || []).length ? pop('data-info-facts', 'Annotations', `<dl class="kv">${I.facts.map(x => `<dt>${esc(x.label)}</dt><dd>${extLink(x.href, esc(x.value))}</dd>`).join('')}</dl>`) : '';
+    const Z = I.diseases;
+    const diseases = Z && Z.items && Z.items.length ? pop('data-info-diseases', esc(Z.title), `<ol class="pv-dis">${Z.items.map(d => `<li data-disease>`
+      + `${extLink(d.href, `<span>${esc(d.name)}</span>`, 'link pv-dis-name')}<span class="num">${fmt(d.score, 2)}</span>`
+      + `<span class="pv-dis-bar" aria-hidden="true"><i style="width:${Math.max(1, Math.min(100, Number(d.score) * 100 || 0))}%"></i></span></li>`).join('')}</ol>`
+      + (Z.all ? `<p class="small" style="margin-top:8px">${extLink(Z.all.href, esc(Z.all.text))}</p>` : '')
+      + (Z.note ? `<p class="small mut"${Z.tip ? ` title="${esc(Z.tip)}"` : ''}>${esc(Z.note)}</p>` : '')) : '';
+    set(el, `<span class="pv-info-title">${esc(I.title)}</span>${I.name ? `<span class="mut">${esc(I.name)}</span>` : ''}`
+      + (I.links || []).map(x => `<span><span class="mut">${esc(x.label)} </span>${extLink(x.href, esc(x.value))}</span>`).join('') + facts + diseases);
   }
   function renderOverlay() {
     // Viewer.tsx: the legend of what is drawn now and, above it, the protein's style buttons; once the view is drawn
@@ -296,19 +325,21 @@
       if (body.__pv !== key) {
         body.__pv = key;
         const P = S.prot, listed = P.rows.filter(r => D.maxLigands == null || r.rank <= D.maxLigands).length;
-        body.innerHTML = `<div role="tabpanel" aria-label="Top hits"><p class="pv-note">Ligands docked into ${esc(P.id)}, highest affinity (lowest Vina score) first. Pick one to see its poses.</p>`
+        body.innerHTML = `<div role="tabpanel" aria-label="Top hits"><p class="pv-note">${P.topNote != null ? esc(P.topNote)
+          : `Ligands docked into ${esc(protName(P))}, highest affinity (lowest Vina score) first. Pick one to see its poses.`}</p>`
           + `<input type="search" class="pv-search" id="pv-q" placeholder="Search ligands (name or SMILES)" aria-label="Search ligands" value="${esc(S.q)}">`
           + `<div class="scroll-x"><table class="dt"><thead><tr><th class="r">#</th><th>Ligand</th><th class="r">Vina</th><th>Pocket</th><th class="r">Mode</th><th class="r" title="Ligand efficiency: −Vina / heavy atoms">LE</th></tr></thead>`
           + `<tbody id="pv-rows"></tbody></table></div>`
-          + (P.n > listed ? `<p class="pv-note">The best ${int(listed)} of ${int(P.n)} ligands docked into ${esc(P.id)} (max_ligands=${int(D.maxLigands)}).</p>` : '')
+          + (P.topNote == null && P.n > listed ? `<p class="pv-note">The best ${int(listed)} of ${int(P.n)} ligands docked into ${esc(protName(P))} (max_ligands=${int(D.maxLigands)}).</p>` : '')
           + `<p class="pv-note">Vina: highest affinity of the pair (its lowest AutoDock Vina score over all pockets and modes, kcal/mol; more negative is better). Pocket and mode of that pose. LE: ligand efficiency.</p></div>`;
       }
       const t = S.q.trim().toLowerCase();
-      const rows = S.prot.rows.filter(r => { const L = ligOf(r); return !t || `${L.id} ${L.smiles}`.toLowerCase().includes(t); });
-      set($('pv-rows'), rows.length ? rows.map(r => `<tr data-act="row" data-v="${r.lig}" data-active="${S.row === r}"><td class="r num mut">${r.rank}</td>`
+      const text = L => `${L.id} ${L.smiles}` + (L.ids ? ` ${L.ids.map(x => x.value).join(' ')}` : '');   // Atlas pages: also the identifiers
+      const rows = S.prot.rows.filter(r => !t || text(ligOf(r)).toLowerCase().includes(t));
+      set($('pv-rows'), rows.length ? rows.map(r => `<tr data-act="row" data-v="${r.lig}" data-active="${S.row === r}"><td class="r num mut">${r.rank == null ? '–' : r.rank}</td>`
         + `<td class="trunc"><span class="link" title="${esc(ligOf(r).id)}">${esc(ligOf(r).id)}</span></td><td class="r num">${fmt(r.vina)}</td>`
         + `<td><span style="display:inline-flex;align-items:center;gap:6px" class="mut"><i class="dot"></i>${r.pocket}</span></td><td class="r num">${r.mode}</td>`
-        + `<td class="r num">${fmt(r.le, 2)}</td></tr>`).join('') : `<tr><td colspan="6" class="mut">${S.prot.rows.length ? `No ligand matches “${esc(S.q)}”.` : `No ligand has a pose in ${esc(S.prot.id)}.`}</td></tr>`);
+        + `<td class="r num">${fmt(r.le, 2)}</td></tr>`).join('') : `<tr><td colspan="6" class="mut">${S.prot.rows.length ? `No ligand matches “${esc(S.q)}”.` : S.prot.topNote != null ? 'No drug with a PoseBusters-valid pose.' : `No ligand has a pose in ${esc(protName(S.prot))}.`}</td></tr>`);
       return;
     }
     set(body, S.tab === 'pair' ? pairPanel() : S.tab === 'download' ? downloadPanel() : pocketsPanel());
@@ -333,12 +364,14 @@
     const modeText = S.view === 'best' ? `mode ${S.mode} · highest affinity` : `mode ${S.mode}/${modes.length}`;
     const note = S.view === 'modes' && m ? `${fmt(m[0])} kcal/mol${m[0] >= 0 ? ' (no favourable pose)' : ''} · RMSD to mode 1: ${fmt(m[1], 2)}–${fmt(m[2], 2)} Å`
       : `pocket ${r.pocket} · the pair's best pose`;
-    const across = r.across ? `<dt>Across proteins</dt><dd>${esc(P.id)} is #${r.across[0]} of ${r.across[1]} docked proteins for this ligand</dd>` : '';
+    // an Atlas page (P.info) in the site's words: "drugs on", "compound", and a line when the protein is outside the drug's best targets
+    const across = r.across ? `<dt>Across proteins</dt><dd>${esc(protName(P))} is ${r.across[0] == null ? `not among the top ${int(r.across[2])} of ${int(r.across[1])}`
+      : `#${r.across[0]} of ${P.info ? int(r.across[1]) : r.across[1]}`} docked proteins for this ${P.info ? 'compound' : 'ligand'}</dd>` : '';
     return `<div role="tabpanel" aria-label="Selected pair"><div class="pv-drug" data-pair-drug><div class="pv-svg">${L.svg ? `<img alt="2D structure of ${esc(L.id)}" src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(L.svg)}">` : ''}</div>`
       + `<div style="min-width:0"><h3>${esc(L.id)}</h3>`
-      + `<p class="small mut">Docked with PocketVina into ${P.docked.length} pocket${P.docked.length === 1 ? '' : 's'} of ${esc(P.id)}</p></div></div>`
+      + `<p class="small mut">Docked with PocketVina into ${P.docked.length} pocket${P.docked.length === 1 ? '' : 's'} of ${esc(protName(P))}</p></div></div>`
       + identifiers(L)
-      + `<dl class="kv" data-pair-score><dt>Highest affinity (Vina, kcal/mol)</dt><dd class="num">${fmt(r.vina)} kcal/mol · rank ${int(r.rank)} of ${int(P.n)} on ${esc(P.id)} (top ${pct}%)</dd>`
+      + `<dl class="kv" data-pair-score><dt>Highest affinity (Vina, kcal/mol)</dt><dd class="num">${fmt(r.vina)} kcal/mol${r.rank == null ? '' : ` · rank ${int(r.rank)} of ${int(P.n)}${P.info ? ' drugs' : ''} on ${esc(protName(P))} (top ${pct}%)`}</dd>`
       + `${across}<dt>Ligand efficiency</dt><dd class="num">${fmt(r.le, 2)}</dd><dt>Highest-affinity pose</dt><dd>pocket ${r.pocket}, mode ${r.mode}</dd>${posebusters(r.pb)}</dl>`
       + `<h4>Highest affinity in each pocket</h4><div class="pv-pk-grid" role="group" aria-label="Pocket">${pockets}</div>`
       + `<div class="pv-modes" data-pair-modes><button type="button" class="btn" data-act="step" data-v="-1" aria-label="Previous mode"${S.mode <= 1 ? ' disabled' : ''}>${ICON.left}</button>`
@@ -348,8 +381,17 @@
       + `<label><input type="checkbox" data-act="allmodes"${S.allModes && S.view === 'modes' ? ' checked' : ''}${cur ? '' : ' disabled'}>Show all modes</label></div>`
       + contactsList() + `</div>`;
   }
-  // the ligand's identifiers the run has, each with a copy button (no empty rows): the docked SMILES only when it is not the input
+  // the ligand's identifiers the run has, each with a copy button (no empty rows): the docked SMILES only when it is not the input.
+  // Atlas pages: the rows of L.ids (a link, a tooltip; a long list collapsed to its short text)
+  const copyButton = (label, v) => `<button type="button" class="pv-copy" data-act="copy" data-v="${esc(v)}" title="Copy ${esc(label)}" aria-label="Copy ${esc(label)}">${ICON.copy}</button>`;
   function identifiers(L) {
+    if (L.ids) {
+      return `<dl class="kv pv-ids" data-pair-ids>${L.ids.filter(x => x && x.value).map(x => {
+        const v = String(x.value), shown = extLink(x.href, `<span class="mono pv-id">${esc(v)}</span>`);
+        const value = x.short ? `<details class="pv-fold"><summary><span class="mono pv-id">${esc(x.short)}</span></summary>${shown}</details>` : shown;
+        return `<dt${x.tip ? ` title="${esc(x.tip)}"` : ''}>${esc(x.label)}</dt><dd data-id="${esc(x.label)}">${value}${copyButton(x.label, v)}</dd>`;
+      }).join('')}</dl>`;
+    }
     const rows = [['Ligand ID', L.id], ['SMILES', L.smiles], ['Docked SMILES', L.docked && L.docked !== L.smiles ? L.docked : null,
       'The fragment docked, e.g. without the counter-ion of a salt'], ['InChIKey', L.inchikey, 'Of the docked structure']].filter(x => x[1]);
     return `<dl class="kv pv-ids" data-pair-ids>${rows.map(([k, v, tip]) => `<dt${tip ? ` title="${esc(tip)}"` : ''}>${k}</dt>`
@@ -372,8 +414,8 @@
     const pair = r ? (r.sdf ? item('save-sdf', 'Highest-affinity pose (SDF)', `${pairStem()}_top.sdf`) : '')
       + (cur ? item('save-pdbqt', `Pocket ${S.pk}: all modes (PDBQT)`, `${pairStem()}_pk${S.pk}_modes.pdbqt`) : '') : '';
     return `<div role="tabpanel" aria-label="Download"><div class="pv-dl" data-downloads>`
-      + (r ? `<h4>${esc(ligOf(r).id)} on ${esc(P.id)}</h4>${pair}` : `<p class="mut">Pick a ligand in Top hits for its poses.</p>`)
-      + `<h4>${esc(P.id)}</h4>`
+      + (r ? `<h4>${esc(ligOf(r).id)} on ${esc(protName(P))}</h4>${pair}` : `<p class="mut">Pick a ligand in Top hits for its poses.</p>`)
+      + `<h4>${esc(protName(P))}</h4>`
       + item('save-protein', 'Protein (PDB)', `PV_${P.name}.pdb`, 'the structure the ligands were docked into')
       + item('save-residues', 'Pocket residues (CSV)', `PV_${P.name}_pockets.csv`, 'every P2Rank pocket: rank, score, centre, residues')
       + `<button type="button" class="link" data-act="image"${S.drawn && !S.imageBusy ? '' : ' disabled'}>Image of the view (PNG)</button><span class="pv-file mono">${esc(imageName())}</span>`
@@ -409,32 +451,37 @@
   function pocketsPanel() {
     const P = S.prot, n = {};
     for (const r of P.rows) n[r.pocket] = (n[r.pocket] || 0) + 1;
+    const plddt = P.pockets.some(p => p.plddt != null), cols = plddt ? 7 : 6;   // Atlas pages: the pockets' pLDDT
     const resOf = id => { const [ch, num] = String(id).split('_'), nm = S.names && S.names[id]; return { chain: ch, seq: parseInt(num, 10), name: nm ? nm[0] : '' }; };
     const rows = P.pockets.map(p => {
       const open = S.openPocket === p.rank;
       const head = `<tr data-act="pocket" data-v="${p.rank}" data-active="${S.focusPocket === p.rank}"><td><span style="display:inline-flex;align-items:center;gap:6px">`
         + `<span style="display:inline-flex;${open ? 'transform:rotate(180deg)' : ''}" class="mut">${ICON.down}</span><i class="dot" style="background:${pocketColor(p.rank)}"></i>${p.rank}</span></td>`
         + `<td class="r num">${fmt(p.score, 1)}</td><td class="r num">${fmt(p.probability, 2)}</td><td class="r num">${p.residues.length}</td>`
+        + (plddt ? `<td class="r num" data-plddt>${fmt(p.plddt)}</td>` : '')
         + `<td>${p.docked ? 'yes' : '<span class="mut">no</span>'}</td><td class="r num">${p.docked ? int(n[p.rank] || 0) : '–'}</td></tr>`;
       if (!open) return head;
       const best = P.rows.filter(r => r.pocket === p.rank).sort((a, b) => a.vina - b.vina)[0];
       const rs = p.residues.map(resOf).sort((a, b) => (a.chain < b.chain ? -1 : a.chain > b.chain ? 1 : a.seq - b.seq));
       const chips = rs.map(x => { const on = S.focusRes && S.focusRes.chain === x.chain && S.focusRes.seq === x.seq;
         return `<button type="button" class="tag mono" data-act="res" data-v="${esc(x.chain)}:${x.seq}" aria-pressed="${!!on}">${esc(x.name ? `${x.name}${x.seq}` : `${x.chain}_${x.seq}`)}</button>`; }).join('');
-      return head + `<tr class="pv-detail" data-pocket-detail="${p.rank}"><td colspan="6"><dl class="kv" style="margin-top:0"><dt>Centre</dt><dd class="num">${p.center.map(x => fmt(x, 1)).join(', ')} Å</dd>`
+      return head + `<tr class="pv-detail" data-pocket-detail="${p.rank}"><td colspan="${cols}"><dl class="kv" style="margin-top:0"><dt>Centre</dt><dd class="num">${p.center.map(x => fmt(x, 1)).join(', ')} Å</dd>`
+        + (plddt ? `<dt>Mean pLDDT</dt><dd class="num">${fmt(p.plddt)}</dd>` : '')
         + `<dt>Docked</dt><dd>${p.docked ? 'yes' : 'no (not among the pockets docked)'}</dd>`
         + (best ? `<dt>Highest-affinity ligand here</dt><dd><button type="button" class="link" data-act="row" data-v="${best.lig}">${esc(ligOf(best).id)}</button><span class="num mut"> · ${fmt(best.vina)} kcal/mol</span></dd>` : '')
         + `</dl><div class="pv-res" aria-label="Residues of pocket ${p.rank}">${chips || '<span class="mut small">no residues listed</span>'}</div></td></tr>`;
     }).join('');
     return `<div role="tabpanel" aria-label="Pockets"><div class="scroll-x"><table class="dt"><thead><tr><th>Pocket</th><th class="r">Score</th><th class="r">Prob.</th>`
-      + `<th class="r">Residues</th><th>Docked</th><th class="r" title="Ligands listed in Top hits whose highest-affinity pose is in this pocket">Best poses</th></tr></thead><tbody>${rows}</tbody></table></div>`
-      + `<p class="pv-note">P2Rank pockets of ${esc(P.id)}; ${P.docked.length} of them were docked. Score and Prob.: P2Rank. Best poses: ligands listed in Top hits whose highest-affinity pose`
+      + `<th class="r">Residues</th>` + (plddt ? `<th class="r" title="AlphaFold confidence of the pocket residues (mean pLDDT, 0–100)">pLDDT</th>` : '')
+      + `<th>Docked</th><th class="r" title="Ligands listed in Top hits whose highest-affinity pose is in this pocket">Best poses</th></tr></thead><tbody>${rows}</tbody></table></div>`
+      + `<p class="pv-note">P2Rank pockets of ${esc(protName(P))}; ${P.docked.length} of them were docked. Score and Prob.: P2Rank.${plddt ? ' pLDDT: AlphaFold confidence of the pocket residues.' : ''}`
+      + ` Best poses: ligands listed in Top hits whose highest-affinity pose`
       + ` is in that pocket. Click a pocket to show it in 3D and list its residues; a residue to look at it.</p></div>`;
   }
   function update(force) {
     const k = poseKey();
     if (k !== lastPoseKey) { lastPoseKey = k; S.hidden = []; }      // a new pose shows every interaction type again
-    renderHead(); renderOverlay(); renderChips(); renderTabs(); renderBody();
+    renderHead(); renderInfo(); renderOverlay(); renderChips(); renderTabs(); renderBody();
     send(force);
   }
 
@@ -487,11 +534,16 @@
   });
   root.addEventListener('input', e => { if (e.target.id === 'pv-q') { S.q = e.target.value; renderBody(); } });
   root.addEventListener('toggle', e => { if (e.target.matches && e.target.matches('details.pv-legend')) S.legendOpen = e.target.open; }, true);
+  // one panel of the protein's information open at a time
+  root.addEventListener('toggle', e => { if (e.target.matches && e.target.matches('details.pv-pop') && e.target.open) root.querySelectorAll('details.pv-pop[open]').forEach(d => { if (d !== e.target) d.open = false; }); }, true);
   root.addEventListener('click', e => { if (e.target.id === 'pv-shot') closeShot(); });
   window.addEventListener('keydown', e => {
     if (e.target && e.target.closest && e.target.closest('input,select,textarea')) return;
     if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && S.row) { e.preventDefault(); step(e.key === 'ArrowLeft' ? -1 : 1); }
-    else if (e.key === 'Escape') { if (!$('pv-shot').hidden) closeShot(); else if (S.focus3d.active) clearFocus3d(); }
+    else if (e.key === 'Escape') {
+      const pop = root.querySelector('details.pv-pop[open]');
+      if (!$('pv-shot').hidden) closeShot(); else if (pop) pop.open = false; else if (S.focus3d.active) clearFocus3d();
+    }
   });
 
   window.__pvState = () => ({

@@ -84,7 +84,8 @@ def parse(argv):
     over (none for a valid command line)."""
     cmd, name, parent, args = cli.cli, "pocketvina", None, list(argv)
     while True:
-        ctx = click.Context(cmd, info_name=name, parent=parent)
+        # with the command's context settings, as when it runs: click keeps the help option a command makes first
+        ctx = click.Context(cmd, info_name=name, parent=parent, **cmd.context_settings)
         _, rest, _ = cmd.make_parser(ctx).parse_args(args=args)
         if not isinstance(cmd, click.Group) or not rest:
             return cmd, rest

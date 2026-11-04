@@ -31,6 +31,7 @@ The page has the layout of the protein page of the
 [PocketVina Atlas](https://bimsbstatic.mdc-berlin.de/akalin/asarigun/pocketvina_atlas/). In Jupyter, Colab or
 VS Code it appears below the cell. In a script it is saved as an HTML file, such as `PV_1fbl.html`, and the path is
 printed. The page contains all its data and works offline.
+`Atlas.show()` draws a protein of the PocketVina Atlas on the same page ([PocketVina Atlas](atlas.md)).
 
 | Part | What it shows |
 | --- | --- |

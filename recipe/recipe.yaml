@@ -8,7 +8,7 @@
 schema_version: 1
 
 context:
-  version: "0.2.1"  # = pocketvina.__version__ (tests/test_recipe.py checks it)
+  version: "0.3.0"  # = pocketvina.__version__ (tests/test_recipe.py checks it)
   # oldest Python of the noarch package's host, run and test environments (CFEP-25; conda-forge's global pinning has
   # one, this overrides it). pyproject.toml allows 3.9, but conda-forge has no Python 3.9 rdkit for the Boost the
   # engine is built with (libboost-devel below; the last Python 3.9 rdkit, 2025.03, has Boost 1.86)

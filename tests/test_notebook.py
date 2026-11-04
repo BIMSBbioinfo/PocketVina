@@ -6,6 +6,9 @@ ligands in ``../example``). What makes it run without a GPU stays out of the not
 that stubs P2Rank (the fixture pockets) and the receptor conversion (cropped receptors, as ``test_pipeline`` does),
 and the fake engine docks (``fake_engine_env``). The kernel runs this interpreter, with ``pocketvina`` imported from
 this checkout. Skipped without nbformat, nbclient or ipykernel; the structure checks need only nbformat.
+
+The Atlas notebook (``notebooks/atlas_colab.ipynb``, no GPU) runs the same way, on the fixture release of the PocketVina
+Atlas (``$POCKETVINA_ATLAS``), without internet.
 """
 import ast
 import importlib.util
@@ -31,6 +34,8 @@ CELL_TIMEOUT_S = 300
 CODE_TAGS = ["install", "dock", "load", "show", "select", "pair-show", "select-all", "bust", "export"]
 SHOW_TAGS = ("show", "pair-show", "select-all")
 MAX_CODE_LINES = 30
+ATLAS_NOTEBOOK = REPO_ROOT / "notebooks" / "atlas_colab.ipynb"
+ATLAS_CODE_TAGS = ["install", "atlas", "search", "protein", "best-scores", "select", "bust", "export", "download"]
 # the cell this test puts in front of the notebook: P2Rank and the receptor conversion stubbed, no GPU listed
 CI_CELL = f"""import sys
 sys.path.insert(0, {str(TESTS_DIR)!r})
@@ -227,34 +232,44 @@ def _kernel_spec(root: Path) -> None:
     (folder / "kernel.json").write_text(json.dumps(spec))
 
 
-@pytest.fixture
-def executed(notebook, fake_engine_env, tmp_path, monkeypatch):
-    """(executed notebook without the CI cell, its working folder, files in the repository's top folder and
-    notebooks/ before)."""
+def _execute(notebook, workdir: Path, tmp_path: Path, monkeypatch, first_cell: str = ""):
+    """A copy of the notebook (the module fixture stays unexecuted), executed in ``workdir`` by a kernel that runs this
+    interpreter, with ``pocketvina`` and the setup script imported from this checkout; ``first_cell`` runs before the
+    notebook and is not in the result."""
     nbclient = pytest.importorskip("nbclient")
     pytest.importorskip("ipykernel")
-    pytest.importorskip("duckdb")
-    from test_docs import example_inputs
-
     jupyter = tmp_path / "jupyter"
     _kernel_spec(jupyter)
-    workdir = tmp_path / "work" / "notebooks"
-    workdir.mkdir(parents=True)
-    example_inputs(workdir.parent)  # ../example
-    monkeypatch.setenv("POCKETVINA_TMPDIR", str(tmp_path / "tmp"))
-    (tmp_path / "tmp").mkdir()
     path = [str(REPO_ROOT), str(SETUP_SCRIPT.parent), os.environ.get("PYTHONPATH")]
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(filter(None, path)))
     monkeypatch.setenv("JUPYTER_PATH", str(jupyter))
     monkeypatch.setenv("JUPYTER_RUNTIME_DIR", str(tmp_path / "jupyter_runtime"))
     monkeypatch.setenv("IPYTHONDIR", str(tmp_path / "ipython"))
-    nb = nbformat.from_dict(json.loads(json.dumps(notebook)))  # a copy: the module fixture stays unexecuted
-    nb.cells.insert(0, nbformat.v4.new_code_cell(CI_CELL))
+    nb = nbformat.from_dict(json.loads(json.dumps(notebook)))
+    if first_cell:
+        nb.cells.insert(0, nbformat.v4.new_code_cell(first_cell))
     client = nbclient.NotebookClient(nb, kernel_name=KERNEL_NAME, timeout=CELL_TIMEOUT_S, allow_errors=False,
                                      resources={"metadata": {"path": str(workdir)}})
-    before = _repo_listing()
     client.execute()
-    nb.cells.pop(0)
+    if first_cell:
+        nb.cells.pop(0)
+    return nb
+
+
+@pytest.fixture
+def executed(notebook, fake_engine_env, tmp_path, monkeypatch):
+    """(executed notebook without the CI cell, its working folder, files in the repository's top folder and
+    notebooks/ before)."""
+    pytest.importorskip("duckdb")
+    from test_docs import example_inputs
+
+    workdir = tmp_path / "work" / "notebooks"
+    workdir.mkdir(parents=True)
+    example_inputs(workdir.parent)  # ../example
+    monkeypatch.setenv("POCKETVINA_TMPDIR", str(tmp_path / "tmp"))
+    (tmp_path / "tmp").mkdir()
+    before = _repo_listing()
+    nb = _execute(notebook, workdir, tmp_path, monkeypatch, first_cell=CI_CELL)
     return nb, workdir, before
 
 
@@ -267,7 +282,9 @@ def test_notebook_runs(executed, fake_engine_env):
         errors = [o for o in cell.outputs if o.output_type == "error"]
         assert not errors, f"{_tag(cell)} cell: {errors}"
     assert fake_engine_env.calls(), "the notebook did not dock with the fake engine"
-    assert "PocketVina 0.2" in _text(_cell(nb, "install"))
+    import pocketvina
+
+    assert f"PocketVina {pocketvina.__version__}" in _text(_cell(nb, "install"))
 
     # the dock cell's settings reached the run (htvs_mode: the 5 best pockets), and its best scores table appeared
     results = workdir / "results"
@@ -297,3 +314,83 @@ def test_notebook_runs(executed, fake_engine_env):
     assert repr(str(exported)) in _text(_cell(nb, "export"))
     assert exported.read_text().count("$$$$") == n_pockets
     assert _repo_listing() == repo_before
+
+
+# --- the Atlas notebook ----------------------------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def atlas_notebook():
+    return nbformat.read(str(ATLAS_NOTEBOOK), as_version=4)
+
+
+def test_atlas_notebook_is_valid_short_and_clean(atlas_notebook):
+    nb = atlas_notebook
+    nbformat.validate(nb)
+    assert [_tag(c) for c in _code_cells(nb)] == ATLAS_CODE_TAGS
+    for cell in _code_cells(nb):
+        assert cell.outputs == [] and cell.execution_count is None, f"stored outputs in the {_tag(cell)} cell"
+        ast.parse(cell.source, feature_version=(3, 9))
+        assert len(cell.source.splitlines()) <= MAX_CODE_LINES, _tag(cell)
+    assert "accelerator" not in nb.metadata  # no GPU: Colab's default runtime
+    assert nb.metadata["kernelspec"]["name"] == "python3"
+    kinds = [c.cell_type for c in nb.cells]
+    assert kinds[0] == "markdown" and nb.cells[0].source.startswith("# ")
+    assert "colab.research.google.com/github/BIMSBbioinfo/PocketVina/blob/main/notebooks/atlas_colab.ipynb" \
+        in nb.cells[0].source
+    assert "Run all" in nb.cells[0].source
+    assert all(kinds[i - 1] == "markdown" for i, kind in enumerate(kinds) if kind == "code")
+
+
+def test_atlas_notebook_uses_the_simple_api(atlas_notebook):
+    sources = "\n".join(c.source for c in _code_cells(atlas_notebook))
+    for call in ("atlas = Atlas()", 'atlas.search("imatinib")', 'atlas.protein("ABL1")', 'best_scores(protein="ABL1"',
+                 'best_scores(ligand="imatinib"', 'atlas.select(protein="ABL1", ligand="imatinib", pocket="all")',
+                 "pair.show()", "pair.bust()", "pair.export()", "pair.export_protein()",
+                 'atlas.download(proteins=["ABL1"], out="my_atlas")', 'Atlas("my_atlas")'):
+        assert call in sources, call
+    # no test plumbing, and none of the quickstart's GPU setup
+    for unwanted in ("POCKETVINA_", "/tests", "colab_setup", "apt", "java", "OpenCL", "git clone"):
+        assert unwanted not in sources, unwanted
+    install = _cell(atlas_notebook, "install").source
+    assert '"google.colab" in sys.modules' in install and '"pip", "install"' in install
+
+
+@pytest.fixture
+def atlas_executed(atlas_notebook, atlas_dir, tmp_path, monkeypatch):
+    """(executed Atlas notebook, its working folder): it reads the fixture release, not the internet."""
+    monkeypatch.setenv("POCKETVINA_ATLAS", str(atlas_dir))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    before = _repo_listing()
+    try:
+        nb = _execute(atlas_notebook, workdir, tmp_path, monkeypatch)
+    except Exception as e:  # only the error's type: nbclient's message holds the traceback, which may name drugs
+        raise AssertionError(f"the Atlas notebook failed: {getattr(e, 'ename', type(e).__name__)}") from None
+    assert _repo_listing() == before
+    return nb, workdir
+
+
+def test_atlas_notebook_runs(atlas_executed):
+    import pocketvina
+    from pocketvina.workspace import NOT_SHOWN
+
+    nb, workdir = atlas_executed
+    for cell in _code_cells(nb):
+        errors = [o.ename for o in cell.outputs if o.output_type == "error"]
+        assert not errors, f"{_tag(cell)} cell: {errors}"
+    assert f"PocketVina {pocketvina.__version__}" in _text(_cell(nb, "install"))
+    assert "PocketVina Atlas" in "\n".join(_outputs(_cell(nb, "atlas"), "text/html"))
+    assert "<tr" in "\n".join(_outputs(_cell(nb, "search"), "text/html"))
+    assert "P00519" in "\n".join(_outputs(_cell(nb, "protein"), "text/html"))  # ABL1
+    tables = _outputs(_cell(nb, "best-scores"), "text/html")  # of the protein, then of the drug
+    assert len(tables) == 2 and all("vina" in t and "ligand_efficiency" in t for t in tables)
+    # the 3D page: an iframe holding the whole page, with a line for where it is not drawn
+    html = _outputs(_cell(nb, "select"), "text/html")
+    assert len(html) == 1 and html[0].startswith("<iframe srcdoc=") and len(html[0]) > 100_000
+    assert _outputs(_cell(nb, "select"), "text/plain") == [NOT_SHOWN]
+    assert "pb_valid" in "\n".join(_outputs(_cell(nb, "bust"), "text/html"))
+    for name in ("PV_P00519_PVL00129_pocketall_top.sdf", "PV_P00519.pdb"):
+        assert (workdir / name).is_file() and name in _text(_cell(nb, "export")), name
+    assert (workdir / "my_atlas" / "meta.json").is_file()
+    assert "P00519" in "\n".join(_outputs(_cell(nb, "download"), "text/html"))

@@ -14,17 +14,27 @@ docked with the example ligands; SMILES from ``test/example/ligands.txt``):
 molecule10 has a silicon atom, which the engine rejects: it has no output in any pocket, as in the original run.
 molecule2 carries a carboxylic acid; molecule5 a stereocentre (unspecified in its SMILES) and an E double bond.
 
-Tests marked ``@pytest.mark.gpu`` are skipped unless ``POCKETVINA_GPU_TESTS=1``.
+``tests/data/atlas/v1.1/`` is a tiny PocketVina Atlas release in the layout of the real one (three proteins with a
+few drugs each; built by ``tests/data/atlas/make_fixture.py``, which says what is in it). ``atlas_dir`` is its path
+and ``atlas_server`` serves it over HTTP with Range support (``http_server`` serves any folder).
+
+Tests marked ``@pytest.mark.gpu`` are skipped unless ``POCKETVINA_GPU_TESTS=1``, tests marked
+``@pytest.mark.network`` (they read the public Atlas over the internet) unless ``POCKETVINA_NETWORK_TESTS=1``.
 """
 import csv
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
+import socket
 import stat
 import sys
+import threading
+import urllib.parse
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -32,20 +42,25 @@ import pytest
 TESTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = TESTS_DIR.parent
 DATA_DIR = TESTS_DIR / "data"
+ATLAS_DIR = DATA_DIR / "atlas" / "v1.1"
 PACKAGE_DIR = REPO_ROOT / "pocketvina"
 FAKE_ENGINE = TESTS_DIR / "fake_engine.py"
 
 pytest_plugins = ["pytester"]
 
+SKIP_UNLESS = {"gpu": ("POCKETVINA_GPU_TESTS", "needs a GPU: set POCKETVINA_GPU_TESTS=1 to run"),
+               "network": ("POCKETVINA_NETWORK_TESTS", "needs the internet: set POCKETVINA_NETWORK_TESTS=1 to run")}
+
 
 def pytest_collection_modifyitems(config, items):
-    if os.environ.get("POCKETVINA_GPU_TESTS") == "1":
-        return
-    skip = pytest.mark.skip(reason="needs a GPU: set POCKETVINA_GPU_TESTS=1 to run")
-    for item in items:
-        # not `"gpu" in item.keywords`: that also matches a parametrize id or a node named "gpu"
-        if item.get_closest_marker("gpu") is not None:
-            item.add_marker(skip)
+    for marker, (variable, reason) in SKIP_UNLESS.items():
+        if os.environ.get(variable) == "1":
+            continue
+        skip = pytest.mark.skip(reason=reason)
+        for item in items:
+            # not `marker in item.keywords`: that also matches a parametrize id or a node of that name
+            if item.get_closest_marker(marker) is not None:
+                item.add_marker(skip)
 
 
 def _package_entries():
@@ -241,3 +256,104 @@ def fake_engine_env(tmp_path, monkeypatch) -> FakeEngine:
     monkeypatch.delenv("POCKETVINA_FAKE_ENGINE_SLEEP", raising=False)
     monkeypatch.delenv("POCKETVINA_FAKE_ENGINE_SHARED_RNG", raising=False)
     return FakeEngine(path=str(exe), log=log)
+
+
+# --- a local HTTP server (the Atlas over HTTP) ---------------------------------------------------------------------
+
+class _FileHandler(BaseHTTPRequestHandler):
+    """Serves the server's folder: whole files, and one byte range when the request has a Range header and the
+    server answers ranges (``server.ranges = False`` makes it send the whole file instead, status 200); a range that
+    starts past the end of the file gets status 416. ``server.cut = n``: the next n answers stop halfway and the
+    connection closes."""
+
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *args):  # no request log in the test output
+        pass
+
+    def do_GET(self):
+        rel = urllib.parse.unquote(urllib.parse.urlparse(self.path).path).lstrip("/")
+        path = Path(self.server.root, *rel.split("/"))
+        self.server.requests.append((rel, self.headers.get("Range")))
+        if not path.is_file() or ".." in rel.split("/"):
+            self.send_error(404, "no such file")
+            return
+        data = path.read_bytes()
+        asked = re.match(r"bytes=(\d+)-(\d+)$", self.headers.get("Range") or "")
+        if asked and self.server.ranges:
+            start, end = int(asked.group(1)), int(asked.group(2))
+            if start >= len(data):
+                self.send_error(416, "range not satisfiable")
+                return
+            body, status = data[start:end + 1], 206
+        else:
+            body, status = data, 200
+        self.send_response(status)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(body)))
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{start + len(body) - 1}/{len(data)}")
+        self.end_headers()
+        if self.server.cut:
+            self.server.cut -= 1
+            body = body[:len(body) // 2]
+            self.close_connection = True
+        self.wfile.write(body)
+
+
+class FixtureServer(ThreadingHTTPServer):
+    """A local HTTP server for a folder: ``url`` (its base URL, ending in "/"), ``requests`` (one
+    ``(path, Range header)`` per request), ``ranges`` (set it to False to answer Range requests with the whole
+    file, as some servers do) and ``cut`` (set it to n to drop the connection halfway through the next n answers)."""
+
+    daemon_threads = True
+
+    def __init__(self, root):
+        super().__init__(("127.0.0.1", 0), _FileHandler)
+        self.root = str(root)
+        self.requests = []
+        self.ranges = True
+        self.cut = 0
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.server_address[1]}/"
+
+
+@pytest.fixture
+def http_server():
+    """``http_server(folder)`` serves that folder on 127.0.0.1 while the test runs (a ``FixtureServer``)."""
+    servers = []
+
+    def start(root) -> FixtureServer:
+        server = FixtureServer(root)
+        # a short poll interval: shutdown() at the end of the test waits for one
+        threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+        servers.append(server)
+        return server
+
+    yield start
+    for server in servers:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.fixture(scope="session")
+def atlas_dir() -> Path:
+    """The Atlas fixture release ``tests/data/atlas/v1.1`` (read-only: copy before writing)."""
+    return ATLAS_DIR
+
+
+@pytest.fixture
+def atlas_server(http_server, atlas_dir) -> FixtureServer:
+    """The Atlas fixture release served over HTTP (``atlas_server.url``)."""
+    return http_server(atlas_dir)
+
+
+@pytest.fixture
+def closed_port() -> str:
+    """The URL of a port on 127.0.0.1 that nothing listens on (a connection there fails at once)."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    return f"http://127.0.0.1:{port}/"

@@ -9,9 +9,10 @@
     pair.bust()     # PoseBusters on the selected poses, in memory; returns a table
     pair.export()   # one SDF (or PDBQT) file of the selected poses, e.g. PV_1fbl_molecule1_top.sdf
 
-``select`` is a method of ``Results`` and ``PocketVinaGPU``. The selection is fixed when it is made (the poses are
-read then); ``show``, ``bust`` and ``export`` take only output options. File names follow the PocketVina Atlas ID
-scheme with "PV_" in front (``pose_name``).
+``select`` is a method of ``Results`` and ``PocketVinaGPU``; ``Atlas.select`` gives the same ``Selection`` for a pair
+of the PocketVina Atlas. The selection is fixed when it is made (the poses are read then); ``show``, ``bust`` and
+``export`` take only output options. File names follow the PocketVina Atlas ID scheme with "PV_" in front
+(``pose_name``).
 """
 import html
 import logging
@@ -19,7 +20,7 @@ import numbers
 import os
 import re
 import tempfile
-from typing import Dict, List, NamedTuple, Optional, Tuple, Union
+from typing import Callable, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -115,6 +116,50 @@ def _best_record(records: List[pdbqt.ModeRecord]) -> pdbqt.ModeRecord:
     return min(records, key=lambda r: (r.affinity, r.mode))
 
 
+def _pick_poses(block_of: Callable[[int], bytes], docked: List[int], pocket: PocketArg, mode: ModeArg,
+                best_pocket: int, best_mode: int, protein: str, ligand: str) -> List[Pose]:
+    """The poses ``select`` picks from one pair's engine output, for a results directory and for the PocketVina
+    Atlas alike. ``block_of(k)``: the engine output of pocket k (PDBQT bytes, every mode); ``docked``: the pockets with
+    poses; ``best_pocket`` / ``best_mode``: where the pair's best pose is; ``pocket`` and ``mode`` as ``select`` takes
+    them (checked). Raises ``ValueError`` for a pocket without poses and for a mode out of range."""
+    if pocket is None:
+        pockets = [best_pocket]
+    elif pocket == "all":
+        pockets = docked
+    elif pocket not in docked:
+        raise ValueError(f"pocket {pocket} has no poses of ligand {ligand!r} in protein {protein!r}: it was not docked "
+                         f"(or the docking gave no pose there); pockets with poses: "
+                         f"{', '.join(map(str, docked))}")
+    else:
+        pockets = [pocket]
+
+    poses: List[Pose] = []
+    n_modes: Dict[int, int] = {}
+    for k in pockets:
+        block = block_of(k)
+        records = pdbqt.parse_modes(block)
+        n_modes[k] = len(records)
+        if mode == "all":
+            chosen = records
+        elif mode == 1:
+            best = [r for r in records if (k, r.mode) == (best_pocket, best_mode)]
+            chosen = best or [_best_record(records)]
+        elif mode <= len(records):
+            chosen = [records[mode - 1]]
+        elif pocket == "all":
+            continue  # this pocket has fewer modes
+        else:
+            raise ValueError(f"mode {mode} is out of range: pocket {k} has modes 1 to {len(records)} for ligand "
+                             f"{ligand!r} in protein {protein!r}")
+        for r in chosen:
+            poses.append(Pose(k, r.mode, _short(r.affinity), _short(r.rmsd_lb), _short(r.rmsd_ub),
+                              bytes(block[r.raw_offset:r.raw_offset + r.raw_length])))
+    if not poses:
+        raise ValueError(f"mode {mode} is out of range: no pocket has that many modes for ligand {ligand!r} in protein "
+                         f"{protein!r} (modes per pocket: {', '.join(f'{k}: {n}' for k, n in n_modes.items())})")
+    return poses
+
+
 def select(results: Results, protein: str, ligand, pocket: PocketArg = None, mode: ModeArg = 1) -> "Selection":
     """The poses of one protein x ligand pair (see ``Selection``); ``results``: an open ``Results``.
 
@@ -144,41 +189,8 @@ def select(results: Results, protein: str, ligand, pocket: PocketArg = None, mod
     runs = results.pocket_runs(pid, columns=["ligand_idx", "pocket", "status", "n_modes", "length"])
     runs = runs[(runs["ligand_idx"] == i) & (runs["status"] == "ok") & (runs["n_modes"] > 0) & (runs["length"] > 0)]
     docked = sorted(int(k) for k in runs["pocket"])
-    if pocket is None:
-        pockets = [best_pocket]
-    elif pocket == "all":
-        pockets = docked
-    elif pocket not in docked:
-        raise ValueError(f"pocket {pocket} has no poses of ligand {lid!r} in protein {pid!r}: it was not docked "
-                         f"(or the docking gave no pose there); pockets with poses: "
-                         f"{', '.join(map(str, docked))}")
-    else:
-        pockets = [pocket]
-
-    poses: List[Pose] = []
-    n_modes: Dict[int, int] = {}
-    for k in pockets:
-        block = results.pose_block(pid, i, k).encode("utf-8", "surrogateescape")
-        records = pdbqt.parse_modes(block)
-        n_modes[k] = len(records)
-        if mode == "all":
-            chosen = records
-        elif mode == 1:
-            best = [r for r in records if (k, r.mode) == (best_pocket, best_mode)]
-            chosen = best or [_best_record(records)]
-        elif mode <= len(records):
-            chosen = [records[mode - 1]]
-        elif pocket == "all":
-            continue  # this pocket has fewer modes
-        else:
-            raise ValueError(f"mode {mode} is out of range: pocket {k} has modes 1 to {len(records)} for ligand "
-                             f"{lid!r} in protein {pid!r}")
-        for r in chosen:
-            poses.append(Pose(k, r.mode, _short(r.affinity), _short(r.rmsd_lb), _short(r.rmsd_ub),
-                              bytes(block[r.raw_offset:r.raw_offset + r.raw_length])))
-    if not poses:
-        raise ValueError(f"mode {mode} is out of range: no pocket has that many modes for ligand {lid!r} in protein "
-                         f"{pid!r} (modes per pocket: {', '.join(f'{k}: {n}' for k, n in n_modes.items())})")
+    poses = _pick_poses(lambda k: results.pose_block(pid, i, k).encode("utf-8", "surrogateescape"), docked, pocket,
+                        mode, best_pocket, best_mode, pid, lid)
     smiles_docked = row["smiles_docked"] if isinstance(row["smiles_docked"], str) and row["smiles_docked"] else None
     has_best = any((p.pocket, p.mode) == (best_pocket, best_mode) for p in poses)
     return Selection(
@@ -188,18 +200,57 @@ def select(results: Results, protein: str, ligand, pocket: PocketArg = None, mod
         top_sdf=results.top_sdf(pid, i) if has_best else None)
 
 
-class Selection:
-    """Poses of one protein x ligand pair, picked with ``select`` (``Results.select``, ``PocketVinaGPU.select``).
+class _ResultsSource:
+    """Where a ``Selection`` of a results directory gets its protein and its page (the source hook of ``Selection``;
+    ``Atlas.select`` gives another one): the protein is the stored input structure, the page is ``Results.show``'s."""
 
-    Attributes: ``protein``, ``ligand`` (ids), ``smiles``, ``pocket`` and ``mode`` (as selected), ``vina`` (the pair's
-    best Vina score, kcal/mol), ``best_pocket`` / ``best_mode`` (where that pose is), ``poses`` (a table: pocket,
-    mode, vina, rmsd_lb, rmsd_ub), ``name`` (the file name stem, e.g. ``PV_1fbl_molecule1_top``).
+    def __init__(self, results_dir: str):
+        self.results_dir = results_dir
+
+    def protein_pdb(self, protein: str) -> str:
+        """PDB text of the protein the poses were docked into."""
+        from .bust import _protein_pdb
+
+        with Results(self.results_dir) as res:
+            return _protein_pdb(res, protein)
+
+    def show(self, selection: "Selection", *, path=None, molstar: str = "inline", theme: str = "auto",
+             height: int = 760, max_ligands: Optional[int] = 100):
+        """The page of the selection's protein with the selection selected (``Selection.show``)."""
+        from . import workspace
+
+        with Results(self.results_dir) as res:
+            return workspace.show(res, [selection.protein], selection=selection, path=path, molstar=molstar,
+                                  theme=theme, height=height, max_ligands=max_ligands)
+
+
+class _Default:
+    """An argument not given: its value depends on where the selection comes from (shown as "default")."""
+
+    def __repr__(self):
+        return "default"
+
+
+_DEFAULT = _Default()
+
+
+class Selection:
+    """Poses of one protein x ligand pair, picked with ``select`` (``Results.select``, ``PocketVinaGPU.select``,
+    ``Atlas.select``).
+
+    Attributes: ``protein``, ``ligand`` (ids; for the Atlas the UniProt accession and the PVL ID), ``smiles``,
+    ``pocket`` and ``mode`` (as selected), ``vina`` (the pair's best Vina score, kcal/mol), ``best_pocket`` /
+    ``best_mode`` (where that pose is), ``poses`` (a table: pocket, mode, vina, rmsd_lb, rmsd_ub), ``name`` (the file
+    name stem, e.g. ``PV_1fbl_molecule1_top``).
     """
 
-    def __init__(self, *, results_dir: str, protein: str, ligand: str, ligand_idx: int, smiles: str,
+    def __init__(self, *, results_dir: Optional[str] = None, protein: str, ligand: str, ligand_idx: int, smiles: str,
                  smiles_docked: str, pocket: PocketArg, mode: ModeArg, best_pocket: int, best_mode: int, vina: float,
-                 docked_pockets: List[int], poses: List[Pose], top_sdf: Optional[str]):
+                 docked_pockets: List[int], poses: List[Pose], top_sdf: Optional[str], source=None):
+        # source: where show(), bust() and export_protein() get the protein (protein_pdb) and the page (show); by
+        # default the results directory (results_dir; None for a pair of the Atlas)
         self.results_dir = results_dir
+        self._source = source if source is not None else _ResultsSource(results_dir)
         self.protein, self.ligand, self.ligand_idx = protein, ligand, ligand_idx
         self.smiles, self.smiles_docked = smiles, smiles_docked
         self.pocket, self.mode = pocket, mode
@@ -273,7 +324,7 @@ class Selection:
     # --- 3D --------------------------------------------------------------------------------------------------------
 
     def show(self, path=None, *, molstar: str = "inline", theme: str = "auto", height: int = 760,
-             max_ligands: int = 100):
+             max_ligands=_DEFAULT):
         """The PocketVina Atlas website's protein page for this pair's protein, with this pair selected: the 3D view
         (pocket chips, modes, legend, contacts, Save image) beside the tabs Top hits, Selected pair and Pockets.
 
@@ -284,16 +335,14 @@ class Selection:
             PocketVina Atlas website when the page opens (needs internet, a much smaller page).
         theme: "auto" (default: as the browser), "light" or "dark".
         height: height of the view in a notebook, in pixels, e.g. 900.
-        max_ligands: ligands listed in Top hits, best first, e.g. 50 (default 100).
+        max_ligands: ligands listed in Top hits, best first, e.g. 50 (default 100; 25 for a pair of the PocketVina
+            Atlas, whose poses are fetched).
 
         The 3D view is drawn with Mol*, described in the `"Mol* Viewer: modern web app for 3D visualization and analysis
         of large biomolecular structures" <https://doi.org/10.1093/nar/gkab314>`_ paper.
         """
-        from . import workspace
-
-        with Results(self.results_dir) as res:
-            return workspace.show(res, [self.protein], selection=self, path=path, molstar=molstar, theme=theme,
-                                  height=height, max_ligands=max_ligands)
+        options = {} if max_ligands is _DEFAULT else {"max_ligands": max_ligands}
+        return self._source.show(self, path=path, molstar=molstar, theme=theme, height=height, **options)
 
     # --- PoseBusters -----------------------------------------------------------------------------------------------
 
@@ -317,8 +366,7 @@ class Selection:
         _, cfg = pb._config("dock")
         names = pb._check_names(cfg)
         pb.require_posebusters()
-        with Results(self.results_dir) as res:
-            protein_text = pb._protein_pdb(res, self.protein)
+        protein_text = self._source.protein_pdb(self.protein)
         payloads = []
         for p in self._poses:
             if self._top_sdf and (p.pocket, p.mode) == (self.best_pocket, self.best_mode):
@@ -427,13 +475,10 @@ class Selection:
         """Write the protein the poses were docked into as a PDB file; returns its path.
 
         path: the file, e.g. "1fbl.pdb", or a folder; None (default): ``PV_<protein>.pdb`` in the working folder,
-            e.g. PV_1fbl.pdb. The input structure as PDB (a PDBQT or mmCIF input converted), without crystal waters.
+            e.g. PV_1fbl.pdb. The input structure as PDB (a PDBQT or mmCIF input converted), without crystal waters;
+            for a pair of the PocketVina Atlas the AlphaFold model the drugs were docked into.
         """
-        from .bust import _protein_pdb
-        from .io.results import Results
-
-        with Results(self.results_dir) as res:
-            text = _protein_pdb(res, self.protein)
+        text = self._source.protein_pdb(self.protein)
         default = f"PV_{name_part(self.protein)}.pdb"
         target = (os.path.join(os.getcwd(), default) if path is None
                   else os.path.abspath(os.path.expanduser(os.fspath(path))))
