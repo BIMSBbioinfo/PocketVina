@@ -1140,8 +1140,8 @@ class Atlas:
             where it stopped).
 
         Returns the folder's path. Every file is a byte-identical copy of the release's file, checked against the
-        release's MANIFEST.json (sha256). In the folder, best_scores(ligand=...) and search() list its proteins only
-        (and every drug).
+        release's MANIFEST.json (size and sha256; salt_forms/, which it does not list, by size). In the folder,
+        best_scores(ligand=...) and search() list its proteins only (and every drug).
         """
         uniprots = self._protein_list(proteins)
         out = os.path.abspath(os.path.expanduser(os.fspath(out)))

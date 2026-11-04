@@ -1057,7 +1057,7 @@ def atlas_export(ctx, protein, ligand, pocket, mode, fmt, with_protein, out, loc
 @click.pass_context
 def atlas_download(ctx, proteins, out, location):
     """Download what the Atlas has on PROTEINS into a folder that --atlas FOLDER (and Python's Atlas(FOLDER)) reads
-    offline, and print its path. The size is printed before it starts; every file is checked against the release's
+    offline, and print its path. The size is printed before it starts; the files are checked against the release's
     sha256."""
     _setup_logging(ctx)
     with _atlas_errors(location):

@@ -36,8 +36,16 @@ pair.export_protein()                           # the protein as a PDB file
 `atlas.show(protein="ABL1")` shows the protein's page, as `show()` does for a run. *Top hits* lists the drugs that
 score best with a PoseBusters-valid pose, as on the website. *Selected pair* also has the drug's identifiers, and the
 page has the protein's information. In Jupyter, Colab or VS Code the page appears below the cell. In a script it is
-saved as an HTML file, and the path is printed. `path="ABL1.html"` chooses the file. [3D views](visualisation.md)
-shows such a page and its parts.
+saved as an HTML file, and the path is printed. `path="ABL1.html"` chooses the file.
+
+This is the page of ABL1. It is interactive: rotate the protein, pick a drug in *Top hits* or switch pockets. It was
+made from the small copy of the Atlas that the tests use, so it lists only a few drugs:
+
+<!-- built with: Atlas("tests/data/atlas/v1.1").show(protein="ABL1", path="docs/_static/examples/atlas.html") -->
+<iframe src="_static/examples/atlas.html" title="The 3D page of ABL1 in the PocketVina Atlas" width="100%" height="800"
+        loading="lazy" style="border: 1px solid var(--color-background-border); border-radius: 4px;"></iframe>
+
+[3D views](visualisation.md) describes the parts of the page.
 
 ## Identifiers
 

@@ -64,7 +64,8 @@ html_theme_options = {
     "source_branch": "main",
     "source_directory": "docs/",
 }
-# the example 3D pages of visualisation.md (written by show() for the quick start run)
+# the example 3D pages of visualisation.md (written by show() for the quick start run) and of atlas.md (by
+# Atlas.show() on the test fixture)
 html_static_path = ["_static"]
 pygments_style = "sphinx"
 pygments_dark_style = "monokai"
