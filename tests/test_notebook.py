@@ -345,7 +345,7 @@ def test_atlas_notebook_uses_the_simple_api(atlas_notebook):
     sources = "\n".join(c.source for c in _code_cells(atlas_notebook))
     for call in ("atlas = Atlas()", 'atlas.search("imatinib")', 'atlas.protein("ABL1")', 'best_scores(protein="ABL1"',
                  'best_scores(ligand="imatinib"', 'atlas.select(protein="ABL1", ligand="imatinib", pocket="all")',
-                 "pair.show()", "pair.bust()", "pair.export()", "pair.export_protein()",
+                 "pair.show()", "pair.bust()", "pair.export(protein=True)",
                  'atlas.download(proteins=["ABL1"], out="my_atlas")', 'Atlas("my_atlas")'):
         assert call in sources, call
     # no test plumbing, and none of the quickstart's GPU setup

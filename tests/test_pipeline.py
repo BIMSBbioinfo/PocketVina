@@ -727,7 +727,8 @@ def test_best_scores_after_docking_and_in_a_new_session(tmp_path, example_dir, f
     assert len(df) == len(EXAMPLE_PROTEINS) * len(FEW_LIGANDS) and df["vina"].is_monotonic_increasing
     assert set(df.protein_id) == set(EXAMPLE_PROTEINS) and set(df.ligand_id) == set(FEW_LIGANDS)
     assert printed == (f"Best scores:\n{df.head(3).to_string(index=False)}\n"
-                       f"Best 3 of {len(df)} protein x ligand pairs; pocketvina.best_scores() returns all of them.\n")
+                       f"The top 3 of {len(df)} protein x ligand pairs; pocketvina.best_scores() returns all of "
+                       "them.\n")
 
     again = PocketVinaGPU(atlas_config(plist, smiles, out, tmp_path / "tmp"))
     pd.testing.assert_frame_equal(again.best_scores(), df)
@@ -771,8 +772,8 @@ def test_execute_docking_displays_the_best_scores_in_a_notebook(tmp_path, exampl
     monkeypatch.setattr(pv_main, "BEST_SCORES_SHOWN", 3)
     assert pv.execute_docking() == str(tmp_path / "results")
     pd.testing.assert_frame_equal(shown[1], pv.best_scores(top=3))
-    assert docking_output(capsys) == ("Best 3 of 4 protein x ligand pairs; pocketvina.best_scores() returns all of "
-                                       "them.\n")
+    assert docking_output(capsys) == ("The top 3 of 4 protein x ligand pairs; pocketvina.best_scores() returns all "
+                                       "of them.\n")
 
     def broken_display(obj):
         raise RuntimeError("no display")

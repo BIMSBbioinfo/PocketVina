@@ -50,13 +50,30 @@ echo libnvidia-opencl.so.1 | sudo tee /etc/OpenCL/vendors/nvidia.icd
 
 ## Check the installation
 
-These commands show whether PocketVina, P2Rank, Java and the GPU are ready:
+These commands show whether PocketVina, P2Rank, Java and the GPU are ready.
+
+The version of PocketVina:
 
 ```bash
 pocketvina --version
-pocketvina setup p2rank --check     # the P2Rank and Java that runs use
-nvidia-smi                          # the GPUs
-clinfo -l                           # OpenCL must list the NVIDIA GPUs too
+```
+
+The P2Rank and Java that a run uses:
+
+```bash
+pocketvina setup p2rank --check
+```
+
+The NVIDIA GPUs and their driver:
+
+```bash
+nvidia-smi
+```
+
+OpenCL must list the NVIDIA GPUs too:
+
+```bash
+clinfo -l
 ```
 
 The first run on a GPU compiles the engine's GPU code. This takes a few seconds, once.
@@ -73,14 +90,29 @@ PocketVina and P2Rank. After a runtime restart, it skips the steps that are done
 The image holds PocketVina, Java, OpenCL, P2Rank and the web UI. The host needs the
 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/).
 
+Build the image in the folder of the repository:
+
 ```bash
 cd PocketVina
 docker build --network=host -t pocketvina .
+```
+
+Check that it runs. This prints the help of `pocketvina`:
+
+```bash
 docker run --gpus all --rm pocketvina pocketvina --help
-# dock the examples of the checkout: the results are written into the current folder
+```
+
+Dock the examples of the checkout. The results are written into the current folder:
+
+```bash
 docker run --gpus all --rm -v "$PWD:/work" -w /work pocketvina \
     pocketvina dock --proteins example/proteins --ligands example/ligands.txt --out results --top-pockets 2
-# the web UI on port 7860 (app/README.md)
+```
+
+Start the web UI on port 7860 (see `app/README.md`):
+
+```bash
 docker run --gpus all -it -p 7860:7860 pocketvina python3 app/app.py
 ```
 
@@ -91,10 +123,13 @@ You can also install PocketVina into a plain virtual environment:
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install pocketvina
-pocketvina setup p2rank --check      # the Java and P2Rank that runs use
 ```
 
-Java 17 or later must then come from your system.
+Java 17 or later must then come from your system. This shows the Java and P2Rank that a run uses:
+
+```bash
+pocketvina setup p2rank --check
+```
 
 You can add optional extras, for example with `pip install ".[meeko]"`. The extras are `meeko` for ligands prepared
 with Meeko, `app` for the web UI in `app/`, `dev` for the tests and `docs` for these pages.

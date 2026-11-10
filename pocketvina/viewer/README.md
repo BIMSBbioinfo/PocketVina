@@ -1,7 +1,7 @@
 # pocketvina/viewer
 
 The files of the 3D page that `show()` draws in a notebook or writes as an HTML file. The page looks like the
-protein page of the [PocketVina Atlas](https://bimsbstatic.mdc-berlin.de/akalin/asarigun/pocketvina_atlas/).
+protein page of the [PocketVina Atlas](https://pocketvina-atlas.mdc-berlin.de/).
 
 | File | What it is |
 | --- | --- |

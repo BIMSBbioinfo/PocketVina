@@ -8,6 +8,7 @@ mode 1 (-6.3 kcal/mol). Expected poses come from the stored tables (modes, pairs
 import hashlib
 import io
 import os
+import re
 from collections import namedtuple
 from pathlib import Path
 
@@ -158,8 +159,8 @@ def test_pose_names():
 def test_summary(res):
     sel = res.select(PID, LIG, pocket="all", mode="all")
     text = repr(sel)
-    assert text.splitlines()[0] == (f"Selection PV_{PID}_{LIG}: protein {PID}, ligand {LIG}, every docked pocket, "
-                                    "every mode: 18 poses")
+    assert text.splitlines()[0] == (f"Selection PV_{PID}_{LIG}: protein {PID}, ligand {LIG}, every mode in each "
+                                    "pocket: 18 poses")
     assert sel.smiles in text and "   1   " in text and "-5.6  1-9" in text and "2 *" in text and "-6.3  1-9" in text
     page = sel._repr_html_()
     for part in (f"PV_{PID}_{LIG}", sel.smiles, "<td style='text-align:right'>2 &#9733;</td>", "-6.3", "1-9",
@@ -167,7 +168,31 @@ def test_summary(res):
         assert part in page, part
     one = res.select(PID, LIG, pocket=1, mode=3)
     assert "pocket 1, mode 3: 1 pose" in repr(one) and "  -4.6  3" in repr(one)
-    assert "pocket 2 (best pose), best mode: 1 pose" in repr(res.select(PID, LIG))
+    assert "pocket 2, the highest-affinity pose: 1 pose" in repr(res.select(PID, LIG))
+    assert "pocket 2, mode 3: 1 pose" in repr(res.select(PID, LIG, mode=3))
+
+
+@pytest.mark.parametrize("pocket, mode", [("all", "all"), (None, 1), (1, 3)])
+def test_summary_table_is_aligned(res, pocket, mode):
+    """The numbers end under the end of the score header, and the modes start under "modes"."""
+    header, *rows = repr(res.select(PID, LIG, pocket=pocket, mode=mode)).splitlines()[2:]
+    assert header == "  pocket  lowest Vina score (kcal/mol)  modes"
+    cut = header.index("modes")
+    assert rows
+    for row in rows:
+        assert row[cut - 3].isdigit() and row[cut - 2:cut] == "  " and row[cut] != " ", row
+
+
+@pytest.mark.parametrize("pocket", [None, 1, "all"])
+@pytest.mark.parametrize("mode", [1, 3, "all"])
+def test_summary_says_highest_affinity_not_best(res, pocket, mode):
+    """What a reader sees says "highest-affinity" (as the Atlas website does), never "best" before pose, mode, score,
+    Vina, pocket or drug. Field names such as best_pocket keep "best"."""
+    sel = res.select(PID, LIG, pocket=pocket, mode=mode)
+    for shown in (repr(sel), sel._repr_html_()):
+        assert "lowest Vina score (kcal/mol)" in shown
+        assert not re.search(r"best\W+(pose|mode|score|vina|pocket|drug)", shown, re.IGNORECASE), shown
+    assert "the pocket of the pair's highest-affinity pose" in sel._repr_html_()
 
 
 # --- export --------------------------------------------------------------------------------------------------------
@@ -250,6 +275,154 @@ def test_export_protein(res, results_dir, tmp_path, monkeypatch):
     assert sel.export_protein(tmp_path / "sub" / "r.pdb") == str(tmp_path / "sub" / "r.pdb")
     assert sel.export_protein(tmp_path / "sub") == str(tmp_path / "sub" / f"PV_{PID}.pdb")
     assert digests(results_dir) == before
+
+
+def test_export_with_the_protein(res, results_dir, tmp_path, monkeypatch):
+    """export(protein=True): the poses as export() writes them and the protein as export_protein() writes it, next to
+    the poses; returns [poses, protein]. export(ligand=False, protein=True): only the protein, as export_protein()
+    (the same path and text); returns its path. A call without both is an error, and nothing is written."""
+    before = digests(results_dir)
+    sel = res.select(PID, LIG)
+    protein_text = Path(sel.export_protein(tmp_path / "expected.pdb")).read_text()
+    poses_bytes = Path(sel.export(tmp_path / "expected.sdf")).read_bytes()
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+
+    paths = sel.export(protein=True)
+    assert paths == [str(work / f"{STEM}_top.sdf"), str(work / f"PV_{PID}.pdb")]
+    assert sorted(os.listdir(work)) == sorted(os.path.basename(p) for p in paths)
+    assert Path(paths[0]).read_bytes() == poses_bytes and Path(paths[1]).read_text() == protein_text
+    # a file or a folder for the poses: the protein goes next to them; fmt is only for the poses
+    assert sel.export(work / "sub" / "pose.pdbqt", fmt="pdbqt", protein=True) == [
+        str(work / "sub" / "pose.pdbqt"), str(work / "sub" / f"PV_{PID}.pdb")]
+    assert sel.export(str(work / "sub"), protein=True) == [
+        str(work / "sub" / f"{STEM}_top.sdf"), str(work / "sub" / f"PV_{PID}.pdb")]
+    # the protein only: export_protein()'s path and text; no poses
+    only = tmp_path / "only"
+    only.mkdir()
+    monkeypatch.chdir(only)
+    path = sel.export(ligand=False, protein=True)
+    assert path == str(only / f"PV_{PID}.pdb") and os.listdir(only) == [f"PV_{PID}.pdb"]
+    assert Path(path).read_text() == protein_text
+    assert sel.export(only / "r.pdb", ligand=False, protein=True) == str(only / "r.pdb")
+    (only / "sub").mkdir()
+    assert sel.export(only / "sub", ligand=False, protein=True) == str(only / "sub" / f"PV_{PID}.pdb")
+    # the default call is unchanged: one path, a str
+    assert sel.export(ligand=True, protein=False) == str(only / f"{STEM}_top.sdf")
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.chdir(empty)
+    with pytest.raises(ValueError, match=r"ligand=False and protein=False: nothing to write \(pair\.export\(\) "
+                                         r"writes the poses, pair\.export\(protein=True\) the protein too"):
+        sel.export(ligand=False)
+    with pytest.raises(ValueError, match="protein must be True or False, got '1fbl'"):
+        sel.export(protein="1fbl")
+    with pytest.raises(ValueError, match="ligand must be True or False, got None"):
+        sel.export(ligand=None, protein=True)
+    with pytest.raises(ValueError, match=r"fmt must be one of \('sdf', 'pdbqt'\), got 'pdb' \(fmt is the format of "
+                                         r"the poses; the protein is always PDB\)"):
+        sel.export(ligand=False, protein=True, fmt="pdb")
+    with pytest.raises(TypeError):
+        sel.export(None, "sdf", True)  # protein= and ligand= are named
+    with pytest.raises(ValueError, match=re.escape(f"PV_{PID}.pdb is the protein's file: give the poses another name, "
+                                                   f"e.g. {STEM}_top.sdf")):
+        sel.export(f"PV_{PID}.pdb", protein=True)  # the poses would be written over by the protein
+    assert os.listdir(empty) == []
+    assert digests(results_dir) == before
+
+
+def test_export_into_a_new_folder(res, tmp_path, monkeypatch):
+    """A path that ends in "/" is a folder, made if needed, as one that exists (it was a file named "new"): export(),
+    export(protein=True), export(ligand=False, protein=True) and export_protein()."""
+    sel = res.select(PID, LIG)
+    monkeypatch.chdir(tmp_path)
+    assert sel.export("new/") == str(tmp_path / "new" / f"{STEM}_top.sdf")
+    assert sel.export("both/", fmt="pdbqt", protein=True) == [str(tmp_path / "both" / f"{STEM}_top.pdbqt"),
+                                                            str(tmp_path / "both" / f"PV_{PID}.pdb")]
+    assert sel.export("only/", ligand=False, protein=True) == str(tmp_path / "only" / f"PV_{PID}.pdb")
+    assert sel.export_protein("protein/") == str(tmp_path / "protein" / f"PV_{PID}.pdb")
+    assert sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()) == [
+        f"both/PV_{PID}.pdb", f"both/{STEM}_top.pdbqt", f"new/{STEM}_top.sdf", f"only/PV_{PID}.pdb",
+        f"protein/PV_{PID}.pdb"]
+
+
+def test_export_a_path_without_an_extension_is_a_folder(res, tmp_path, monkeypatch):
+    """As the CLI's --out: a path without an extension is a folder, made if needed (it was a file named "poses"):
+    export(), export(protein=True), export(ligand=False, protein=True) and export_protein(). "my.poses" has an
+    extension; "results_v2" and ".poses" (a leading dot only) have none."""
+    sel = res.select(PID, LIG)
+    monkeypatch.chdir(tmp_path)
+    assert sel.export("poses") == str(tmp_path / "poses" / f"{STEM}_top.sdf")
+    assert sel.export("a/b/c", fmt="pdbqt") == str(tmp_path / "a" / "b" / "c" / f"{STEM}_top.pdbqt")
+    assert sel.export(tmp_path / "both", protein=True) == [str(tmp_path / "both" / f"{STEM}_top.sdf"),
+                                                           str(tmp_path / "both" / f"PV_{PID}.pdb")]
+    assert sel.export("results_v2", ligand=False, protein=True) == str(tmp_path / "results_v2" / f"PV_{PID}.pdb")
+    assert sel.export_protein("protein") == str(tmp_path / "protein" / f"PV_{PID}.pdb")
+    assert sel.export(".poses") == str(tmp_path / ".poses" / f"{STEM}_top.sdf")
+    assert sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()) == [
+        f".poses/{STEM}_top.sdf", f"a/b/c/{STEM}_top.pdbqt", f"both/PV_{PID}.pdb", f"both/{STEM}_top.sdf",
+        f"poses/{STEM}_top.sdf", f"protein/PV_{PID}.pdb", f"results_v2/PV_{PID}.pdb"]
+    # a file of the right format, in any case: as before
+    assert sel.export("P.SDF") == str(tmp_path / "P.SDF") and sel.export_protein("R.PDB") == str(tmp_path / "R.PDB")
+
+
+def test_export_a_file_needs_the_extension_of_its_format(res, tmp_path, monkeypatch):
+    """A file for the poses ends in .sdf (fmt="sdf") or .pdbqt (fmt="pdbqt"), the protein's in .pdb: any other
+    extension is an error before anything is written (it was written: SDF poses into "abl1.pdb"); the protein is not
+    read."""
+    sel = res.select(PID, LIG)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sel._source, "protein_pdb", lambda protein: pytest.fail("the protein was read"))
+    for args, kwargs in ((("abl1.pdb",), {}), (("abl1.pdb",), {"protein": True}), (("my.poses",), {}),
+                         (("x.sdf.gz",), {}), (("run_2026.11",), {})):
+        with pytest.raises(ValueError, match=re.escape(f"{tmp_path / args[0]}: poses are written as SDF; use a .sdf "
+                                                       "name, or fmt='pdbqt' for .pdbqt, or a / at the end for a "
+                                                       "folder")):
+            sel.export(*args, **kwargs)
+    with pytest.raises(ValueError, match=re.escape(f"{tmp_path / 'x.txt'}: poses are written as PDBQT; use a .pdbqt "
+                                                   "name, or fmt='sdf' for .sdf")):
+        sel.export("x.txt", fmt="pdbqt", protein=True)
+    for call in (lambda: sel.export_protein("x.sdf"), lambda: sel.export_protein("x.cif"),
+                 lambda: sel.export("x.sdf", ligand=False, protein=True)):
+        with pytest.raises(ValueError, match=r"/x\.(sdf|cif): the protein is written as PDB; use a \.pdb name, or a "
+                                             r"/ at the end for a folder$"):
+            call()
+    assert os.listdir(tmp_path) == []
+    # a folder whose name has a dot: with a "/" at the end, as the message says
+    assert sel.export("run_2026.11/") == str(tmp_path / "run_2026.11" / f"{STEM}_top.sdf")
+
+
+def test_export_protein_with_no_path_into_a_folder_of_its_name(res, tmp_path, monkeypatch):
+    """With no path, a folder named PV_<protein>.pdb in the working folder is written into, as in 0.3.0:
+    export_protein() and export(ligand=False, protein=True) write PV_<protein>.pdb/PV_<protein>.pdb."""
+    sel = res.select(PID, LIG)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / f"PV_{PID}.pdb").mkdir()
+    inside = tmp_path / f"PV_{PID}.pdb" / f"PV_{PID}.pdb"
+    assert sel.export_protein() == str(inside) and inside.read_text() == sel._source.protein_pdb(PID)
+    inside.unlink()
+    assert sel.export(ligand=False, protein=True) == str(inside) and inside.is_file()
+    assert sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*")) == [
+        f"PV_{PID}.pdb", f"PV_{PID}.pdb/PV_{PID}.pdb"]
+
+
+def test_export_into_a_folder_that_is_a_file(res, tmp_path, monkeypatch):
+    """A path without an extension is a folder: a file of that name, e.g. "poses" written by 0.3.0, is an error that
+    says so (it was overwritten), before anything is written or the protein read; the file is kept."""
+    sel = res.select(PID, LIG)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "poses").write_text("old\n")
+    monkeypatch.setattr(sel._source, "protein_pdb", lambda protein: pytest.fail("the protein was read"))
+    for call, ext in ((lambda: sel.export("poses"), ".sdf"),
+                      (lambda: sel.export(tmp_path / "poses", fmt="pdbqt", protein=True), ".pdbqt"),
+                      (lambda: sel.export_protein("poses"), ".pdb"),
+                      (lambda: sel.export("poses", ligand=False, protein=True), ".pdb")):
+        with pytest.raises(ValueError, match=re.escape(f"{tmp_path / 'poses'} is a file, but a path without an "
+                                                       f"extension is a folder: use e.g. poses{ext} for a file")):
+            call()
+    assert os.listdir(tmp_path) == ["poses"] and (tmp_path / "poses").read_text() == "old\n"
 
 
 def test_export_leaves_out_poses_that_do_not_convert(res, tmp_path, monkeypatch, caplog):

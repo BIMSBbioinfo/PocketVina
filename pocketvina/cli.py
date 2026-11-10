@@ -470,7 +470,7 @@ def _dock_atlas(pv: PocketVinaGPU, force: bool) -> int:
     click.echo(f"results: {rd.path}")
     click.echo(f"proteins: {len(new)} docked, {len(done) - len(new)} done before, {len(failed)} failed "
                f"(of {len(listed)})")
-    click.echo(f"best poses: {n_pose}")
+    click.echo(f"highest-affinity poses: {n_pose}")
     for pid, reason in failed.items():
         click.echo(f"failed: {pid}: {reason}")
     if calls_failed:
@@ -546,7 +546,8 @@ proteins done are skipped); 3 nothing docked.
               help="Docking box size (A).  [default: 20 20 20]")
 @click.option("--thread", type=THREAD_TYPE, help="Engine threads.  [default: 8000]")
 @click.option("--num-modes", type=click.IntRange(1), help="Poses per ligand and pocket.  [default: 20]")
-@click.option("--energy-range", type=click.FloatRange(0), help="kcal/mol above the best pose.  [default: 20]")
+@click.option("--energy-range", type=click.FloatRange(0),
+              help="kcal/mol above the highest-affinity pose.  [default: 20]")
 @click.option("--seed", type=_SeedType(), help="Seed of the ligand embedding and the engine, or 'random'.  "
                                                "[default: 42]")
 @click.option("--ligand-prep", type=click.Choice(["standard", "legacy"]),
@@ -568,7 +569,7 @@ proteins done are skipped); 3 nothing docked.
 @click.option("--engine-timeout", type=click.FloatRange(0, min_open=True), metavar="S",
               help="Seconds one engine call may take.  [default: no limit]")
 @click.option("--posebusters/--no-posebusters", default=None,
-              help="atlas: check the best poses with PoseBusters while docking.  [default: no]")
+              help="atlas: check the highest-affinity poses with PoseBusters while docking.  [default: no]")
 @click.option("--posebusters-workers", type=click.IntRange(1), help="PoseBusters worker processes.")
 @click.option("--tmp-dir", type=click.Path(file_okay=False),
               help="Folder for temp files.  [default: $POCKETVINA_TMPDIR, $SLURM_TMPDIR, $TMPDIR, /tmp]")
@@ -623,8 +624,8 @@ def dock(ctx, **cli_opts):
 @cli.command()
 @_results_option
 @click.option("--select", type=click.Choice(BUST_SELECT), default="best", show_default=True,
-              help="best: the stored best pose of each ligand; top_k: its K best modes over all pockets; "
-                   "per_pocket: its K best modes in each pocket.")
+              help="best: the stored highest-affinity pose of each ligand; top_k: its K highest-affinity modes over "
+                   "all pockets; per_pocket: its K highest-affinity modes in each pocket.")
 @click.option("--top-k", type=click.IntRange(1), default=1, show_default=True, help="K of top_k and per_pocket.")
 @click.option("--config", "pb_config", default="dock", show_default=True,
               help="PoseBusters config (dock, dock_fast, ...).")
@@ -673,7 +674,8 @@ def _ligand_arg(res, ligand: str):
 @_results_option
 @click.option("--protein", required=True, help="protein_id.")
 @click.option("--ligand", required=True, help="ligand_id, or ligand_idx (row of tables/ligands.parquet).")
-@click.option("--pocket", type=click.IntRange(1), help="Pocket (P2Rank rank).  [default: the best pose]")
+@click.option("--pocket", type=click.IntRange(1),
+              help="Pocket (P2Rank rank).  [default: the pocket of the highest-affinity pose]")
 @click.option("--mode", type=click.IntRange(1), help="Mode of --pocket.  [default: 1]")
 @click.option("--out", type=click.Path(dir_okay=False),
               help="HTML file to write.  [default: <protein>-<ligand>.html here]")
@@ -687,7 +689,7 @@ def show(ctx, results, protein, ligand, pocket, mode, out, backend):
     """
     _setup_logging(ctx)
     if mode is not None and pocket is None:
-        raise click.UsageError("--mode needs --pocket (without --pocket the best pose is shown)")
+        raise click.UsageError("--mode needs --pocket (without --pocket the highest-affinity pose is shown)")
     with _user_errors():
         from . import viz
         from .io.results import Results
@@ -705,7 +707,7 @@ def show(ctx, results, protein, ligand, pocket, mode, out, backend):
 @cli.command()
 @_results_option
 @click.option("--what", type=click.Choice(EXPORT_WHAT), default="best", show_default=True,
-              help="best: the best pose per protein and ligand; all: every engine output.")
+              help="best: the highest-affinity pose per protein and ligand; all: every engine output.")
 @click.option("--format", "fmt", type=click.Choice(EXPORT_FORMATS), default="sdf", show_default=True,
               help="sdf, pdbqt, or csv (best: best_poses.csv; all: the legacy combined_results.csv).")
 @click.option("--out", required=True, type=click.Path(file_okay=False), help="Folder to write into.")
@@ -789,7 +791,8 @@ def _echo_info(info: dict) -> None:
     click.echo(f"proteins: {info['proteins']} done")
     runs = info["pocket_runs"]
     click.echo(f"pocket runs: {runs['total']}" + (f" ({_counts(runs['by_status'])})" if runs["total"] else ""))
-    click.echo(f"best poses: {info['pairs']['with_pose']} of {info['pairs']['total']} protein x ligand pairs")
+    click.echo(f"highest-affinity poses: {info['pairs']['with_pose']} of {info['pairs']['total']} "
+               "protein x ligand pairs")
     if info["posebusters"]:
         click.echo(f"posebusters: {_counts(info['posebusters'])}")
     if info["problems"]:
@@ -846,10 +849,10 @@ Views: ligands, proteins, pockets, pocket_runs, modes, pairs, and posebusters wh
               help="Write the rows as CSV to this file ('-': standard output) instead of printing a table.")
 @click.pass_context
 def query(ctx, sql, results, top, proteins, csv_path):
-    """Run DuckDB SQL over the results tables, or "query best": the best protein x ligand pairs.
+    """Run DuckDB SQL over the results tables, or "query best": the highest-affinity protein x ligand pairs.
 
-    query best: best pose per protein and ligand, best Vina score first, with ligand efficiency (and PoseBusters
-    status when checked).
+    query best: the highest-affinity pose per protein and ligand, lowest Vina score first, with ligand efficiency
+    (and PoseBusters status when checked).
     """
     _setup_logging(ctx)
     best = sql.strip().lower() == "best"
@@ -887,7 +890,8 @@ def query(ctx, sql, results, top, proteins, csv_path):
 @click.argument("output_dir", type=click.Path(exists=True, file_okay=False))
 @click.option("--results", required=True, type=click.Path(file_okay=False), help="Results directory to write.")
 @click.option("--smiles", type=click.Path(exists=True, dir_okay=False),
-              help="The run's ligand CSV (molecule_name,smiles): ligand order and best-pose SDFs.")
+              help="The run's ligand CSV (molecule_name,smiles): ligand order and the SDFs of the highest-affinity "
+                   "poses.")
 @click.option("--tmp-dir", type=click.Path(file_okay=False), help="Folder for temp files.")
 @click.option("--gzip-level", type=click.IntRange(-1, 9), default=6, show_default=True,
               help="Pose file compression.")
@@ -964,10 +968,10 @@ def _atlas_errors(location):
 
 def _pair_options(f):
     f = click.option("--mode", type=_NumberOrAll(), metavar="N|all",
-                     help="A mode, or 'all'.  [default: 1, the best mode of the pocket]")(f)
+                     help="A mode, or 'all'.  [default: 1, the highest-affinity mode of the pocket]")(f)
     return click.option("--pocket", type=_NumberOrAll(), metavar="N|all",
-                        help="A pocket (P2Rank rank), or 'all': each pocket.  [default: the pocket of the best "
-                             "pose]")(f)
+                        help="A pocket (P2Rank rank), or 'all': each pocket.  [default: the pocket of the "
+                             "highest-affinity pose]")(f)
 
 
 @cli.group("atlas")
@@ -1003,9 +1007,9 @@ def atlas_search(ctx, query, top, location):
 @_atlas_option
 @click.pass_context
 def atlas_show(ctx, protein, ligand, pocket, mode, out, location):
-    """Write the protein's page as an HTML file and print its path: the 3D view beside its best drugs (Top hits),
-    Selected pair, Pockets and Download, with the protein's information. --ligand selects a pair (--pocket and --mode
-    its poses)."""
+    """Write the protein's page as an HTML file and print its path: the 3D view beside its highest-affinity drugs
+    (Top hits), Selected pair, Pockets and Download, with the protein's information. --ligand selects a pair
+    (--pocket and --mode its poses)."""
     _setup_logging(ctx)
     if ligand is None and (pocket is not None or mode is not None):
         raise click.UsageError("--pocket and --mode need --ligand (they pick poses of a pair)")
@@ -1029,23 +1033,20 @@ def atlas_show(ctx, protein, ligand, pocket, mode, out, location):
 @click.option("--fmt", type=click.Choice(ATLAS_EXPORT_FORMATS), default="sdf", show_default=True,
               help="sdf, or pdbqt (the docked models as the engine wrote them).")
 @click.option("--protein", "with_protein", is_flag=True,
-              help="Also write the protein (the AlphaFold model the drugs were docked into) as a PDB file.")
+              help="Also write the protein (the AlphaFold model the drugs were docked into) as a PDB file, "
+                   "PV_<protein>.pdb next to the poses.")
 @click.option("--out", type=click.Path(),
               help="File (.sdf or .pdbqt) or folder to write into.  [default: the pair's file name, here]")
 @_atlas_option
 @click.pass_context
 def atlas_export(ctx, protein, ligand, pocket, mode, fmt, with_protein, out, location):
-    """Write poses of a protein x drug pair (by default its best pose) into one SDF or PDBQT file, and print its
-    path; --protein also writes the protein."""
+    """Write poses of a protein x drug pair (by default its highest-affinity pose) into one SDF or PDBQT file, and
+    print its path; --protein also writes the protein."""
     _setup_logging(ctx)
     with _atlas_errors(location):
         pair = _atlas(location).select(protein, ligand, pocket=pocket, mode=1 if mode is None else mode)
-        if out is not None and not os.path.splitext(out)[1]:
-            os.makedirs(out, exist_ok=True)  # a folder
-        paths = [pair.export(out, fmt=fmt)]
-        if with_protein:
-            paths.append(pair.export_protein(os.path.dirname(paths[0])))
-    for path in paths:
+        paths = pair.export(out, fmt=fmt, protein=with_protein)  # with the protein: [poses, protein]
+    for path in paths if with_protein else [paths]:
         click.echo(path)
 
 
@@ -1058,7 +1059,7 @@ def atlas_export(ctx, protein, ligand, pocket, mode, fmt, with_protein, out, loc
 def atlas_download(ctx, proteins, out, location):
     """Download what the Atlas has on PROTEINS into a folder that --atlas FOLDER (and Python's Atlas(FOLDER)) reads
     offline, and print its path. The size is printed before it starts; the files are checked against the release's
-    sha256."""
+    MANIFEST.json (size and sha256; the few files it does not list, by size)."""
     _setup_logging(ctx)
     with _atlas_errors(location):
         path = _atlas(location).download(list(proteins), out)

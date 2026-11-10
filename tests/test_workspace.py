@@ -359,6 +359,36 @@ def test_page_script_names_and_no_posebusters():
     assert not re.search(r"\$\{L\.svg(?! \?)", js)
 
 
+def test_page_theme_from_the_first_paint(res, tmp_path):
+    """The theme asked for is the page's from its first paint (data-theme), before its script runs; "auto" (the
+    default) starts light and the script then takes the system's theme (data-theme-setting). Nothing else in the page
+    depends on the theme."""
+    js = (VIEWER / "workspace.js").read_text(encoding="utf-8")
+    assert "const setting = document.documentElement.dataset.themeSetting;" in js
+    pages = {}
+    for theme, first in (("auto", "light"), ("light", "light"), ("dark", "dark")):
+        page = Path(res.show(path=tmp_path / f"{theme}.html", theme=theme)).read_text(encoding="utf-8")
+        assert page.startswith(f'<!DOCTYPE html>\n<html lang="en" data-theme="{first}" data-theme-setting="{theme}">\n')
+        pages[theme] = page.split("\n", 2)[2]
+    assert pages["auto"] == pages["light"] == pages["dark"]
+    default = Path(res.show(path=tmp_path / "default.html")).read_text(encoding="utf-8")
+    assert default == (tmp_path / "auto.html").read_text(encoding="utf-8")
+
+
+def test_download_hint_names_no_notebook():
+    """After a download the page says what to do if nothing was downloaded, in words that fit any frame that blocks
+    downloads (a notebook, a website's sandboxed frame): the page's text never says "notebook"."""
+    js = (VIEWER / "workspace.js").read_text(encoding="utf-8")
+    assert ("toast(`Saved ${name}. Nothing downloaded? Downloads are blocked here: in Python, pair.export() writes the "
+            "poses and pair.export(protein=True) the protein too.`);") in js
+    assert ('In Python: <span class="mono">pair.export()</span> and <span class="mono">pair.export(protein=True)'
+            '</span>.') in js  # the Download tab
+    assert "export_protein" not in js
+    assert "Nothing downloaded? Right-click the image &gt; <i>Save image as…</i>" in js
+    text = re.sub(r"(?m)(^|\s)//.*$", "", js.split("*/", 1)[1])  # without the comments
+    assert not re.search(r"notebook", text, re.IGNORECASE)
+
+
 def test_raw_text_check():
     assert workspace._raw_text("a < b && c > d", "x.js") == "a < b && c > d"
     for text, what in (("x = '</script>'", "x.js"), ("<!-- y", "x.js"), ("a{} </style>", "x.css")):
@@ -463,7 +493,7 @@ def test_show_in_a_notebook(res, results_dir, tmp_path, monkeypatch):
     page = html.unescape(re.match(r'<iframe srcdoc="([^"]*)"', tag).group(1))
     assert workspace.page_payload(page)["initial"]["tab"] == "top"
     page2 = html.unescape(re.match(r'<iframe srcdoc="([^"]*)"', tag2).group(1))
-    assert 'data-theme-setting="dark"' in page2
+    assert '<html lang="en" data-theme="dark" data-theme-setting="dark">' in page2  # dark from the first paint
     assert workspace.page_payload(page2)["initial"]["show"] == [1, 2]
 
 
@@ -508,3 +538,13 @@ def test_viewer_changes_are_marked():
         assert any("PocketVina:" in line for line in near), (tag, old[i1:i2], new[j1:j2])
     readme = (VIEWER / "README.md").read_text(encoding="utf-8")
     assert "40e8d59" in readme and "diff -u upstream/viewer.js viewer.js" in readme
+
+
+def test_page_text_says_highest_affinity():
+    """The page's text has the Atlas website's words: "highest-affinity", never "best" before pose, mode, score, Vina,
+    pocket, drug or a number (comments and names such as view 'best' are not text)."""
+    js = (VIEWER / "workspace.js").read_text(encoding="utf-8")
+    text = re.sub(r"(?m)(^|\s)//.*$", "", js)
+    # spaces only: "best" before a dot or a quote is code (best.vina, view 'best'), not text
+    assert not re.search(r"best\s+(poses?|modes?|scores?|vina|pockets?|drugs?|\d|\$\{)", text, re.IGNORECASE)
+    assert ">Highest-affinity poses</th>" in text and "the pair's highest-affinity pose" in text

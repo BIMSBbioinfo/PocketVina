@@ -11,7 +11,7 @@ A run writes this folder:
 results/
   MANIFEST.json                      the run: PocketVina version, settings, checksum of the ligand list
   manifest/<protein_id>.json         written last for each protein: the protein is done
-  poses/<protein_id>.poses           best pose per ligand as SDF, every engine output as PDBQT
+  poses/<protein_id>.poses           highest-affinity pose per ligand as SDF, every engine output as PDBQT
   structures/<protein_id>.pdb.gz     the input structure, gzipped
   tables/
     ligands.parquet                  one table for the whole run
@@ -33,20 +33,60 @@ replace the run. You can change the GPUs, the temp folder and the timeouts.
 
 ### pandas
 
-`Results` gives you the tables as pandas DataFrames:
+`Results` gives you the tables as pandas DataFrames. Open a results folder:
 
 ```python
 from pocketvina.io.results import Results
 
 res = Results("results")
-res.proteins()                                   # protein ids, sorted
-pairs = res.pairs()                              # best pose per protein x ligand
+```
+
+The protein ids, sorted:
+
+```python
+res.proteins()
+```
+
+The highest-affinity pose of each protein and ligand:
+
+```python
+pairs = res.pairs()
+```
+
+The 10 of them with the lowest Vina score:
+
+```python
 pairs.sort_values("vina").head(10)
+```
+
+The P2Rank pockets of one protein, with their score, probability and centre:
+
+```python
 res.pockets("1fbl")[["pocket", "score", "probability", "center_x", "center_y", "center_z"]]
+```
+
+Every pose of one protein with its Vina score (`affinity`). `columns` reads only these columns:
+
+```python
 res.modes("1fbl", columns=["ligand_idx", "pocket", "mode", "affinity"])
+```
+
+The ligands, with the SMILES docked and whether their preparation worked (`status`):
+
+```python
 res.ligands(columns=["ligand_idx", "ligand_id", "smiles_docked", "status"])
-res.top_sdf("1fbl", "molecule1")                 # SDF text of the best pose
-res.structure("1fbl")                            # the input structure (bytes)
+```
+
+The SDF text of the highest-affinity pose of a protein and ligand:
+
+```python
+res.top_sdf("1fbl", "molecule1")
+```
+
+The input structure of a protein, as bytes:
+
+```python
+res.structure("1fbl")
 ```
 
 `Results` reads only the proteins that are done.
@@ -57,6 +97,12 @@ res.structure("1fbl")                            # the input structure (bytes)
 
 ```python
 con = res.duckdb()
+```
+
+Run SQL over these views. `.df()` gives the rows as a pandas DataFrame, here the 10 protein x ligand pairs with the
+lowest Vina score:
+
+```python
 con.sql("""
     SELECT p.protein_id, p.ligand_id, p.vina, round(p.ligand_efficiency, 3) AS le, l.smiles_docked
     FROM pairs p JOIN ligands l USING (ligand_idx)
@@ -64,22 +110,44 @@ con.sql("""
 """).df()
 ```
 
-You can run the same SQL from the command line. Add `--csv` to save the rows:
+You can run SQL from the command line too, here the lowest Vina score of each ligand over all proteins, lowest first:
 
 ```bash
 pocketvina query --results results "SELECT ligand_id, min(vina) AS best FROM pairs GROUP BY ligand_id ORDER BY best"
+```
+
+With `--csv`, the rows are saved as a CSV file, here every pose with a Vina score below -9:
+
+```bash
 pocketvina query --results results --csv strong.csv "SELECT * FROM modes WHERE affinity < -9"
 ```
 
 ## Exports
 
-`pocketvina export` writes poses and tables as plain files:
+`pocketvina export` writes poses and tables as plain files. With `--what best --format sdf`, it writes the
+highest-affinity pose of each protein and ligand, one SDF file per protein x ligand:
 
 ```bash
-pocketvina export --results results --what best --format sdf --out best_poses   # one SDF per protein x ligand
-pocketvina export --results results --what all --format pdbqt --out outputs     # every engine output
-pocketvina export --results results --what best --format csv --out tables       # best_poses.csv
-pocketvina export --results results --what all --format csv --out tables        # combined_results.csv, as in v0.1
+pocketvina export --results results --what best --format sdf --out best_poses
+```
+
+With `--what all --format pdbqt`, it writes every engine output:
+
+```bash
+pocketvina export --results results --what all --format pdbqt --out outputs
+```
+
+With `--what best --format csv`, it writes the highest-affinity pose of each protein and ligand as a table,
+`best_poses.csv`:
+
+```bash
+pocketvina export --results results --what best --format csv --out tables
+```
+
+With `--what all --format csv`, it writes `combined_results.csv`, as in v0.1:
+
+```bash
+pocketvina export --results results --what all --format csv --out tables
 ```
 
 In Python, use `res.export(out_dir, what=..., fmt=...)` and `res.to_combined_csv(path)`.
@@ -93,10 +161,10 @@ All tables are Parquet files. "null" marks columns that can be empty. Vina score
 - `protein_id`: the structure file name without extension. Characters other than `A-Za-z0-9._-` become `_`.
 - `ligand_id`: the `molecule_name` of the input. `ligand_idx` is its row in `tables/ligands.parquet`, from 0.
 - `pocket`: the P2Rank rank of the pocket, where 1 is the best.
-- `mode`: the rank of a pose within one pocket, where 1 is the best.
+- `mode`: the rank of a pose within one pocket, where 1 is the highest-affinity pose.
 
-The best pose of a ligand has the lowest Vina score over all docked pockets. Ties go to the lower pocket, then the
-lower mode.
+The highest-affinity pose of a ligand has the lowest Vina score over all docked pockets. Ties go to the lower pocket,
+then the lower mode.
 
 ### ligands
 
@@ -144,7 +212,7 @@ One row per ligand and docked pocket.
 | --- | --- | --- |
 | `protein_id`, `ligand_idx`, `ligand_id`, `pocket` | string, int32, string, int8 | |
 | `status` | string | `ok`, `no_output`, `parse_error`, `engine_error` or `skipped` |
-| `n_modes`, `best_affinity` | int8, float32 null | poses found, and the best Vina score in this pocket |
+| `n_modes`, `best_affinity` | int8, float32 null | poses found, and the lowest Vina score in this pocket |
 | `offset`, `length`, `raw_length`, `sha256` | | where the engine output is in the pose file |
 | `seed`, `runtime_s`, `error` | int64 null, float32 null, string null | engine seed, seconds per ligand, error message |
 
@@ -161,15 +229,15 @@ One row per pose.
 
 ### pairs
 
-The best pose of each ligand in each protein.
+The highest-affinity pose of each ligand in each protein.
 
 | Column | Type | Meaning |
 | --- | --- | --- |
 | `protein_id`, `uniprot`, `ligand_idx`, `ligand_id` | | |
-| `vina` | float32 | best Vina score. NaN without a pose |
-| `best_pocket`, `best_mode` | int8 | where the best pose is. -1 without a pose |
+| `vina` | float32 | lowest Vina score. NaN without a pose |
+| `best_pocket`, `best_mode` | int8 | where the highest-affinity pose is. -1 without a pose |
 | `rmsd_lb`, `rmsd_ub` | float32 | of that mode |
-| `pb_status` | string, null | PoseBusters status of the best pose |
+| `pb_status` | string, null | PoseBusters status of the highest-affinity pose |
 | `top_offset`, `top_length`, `top_raw_length`, `top_sha256` | | where its SDF is in the pose file |
 | `sdf_status` | string | `ok`, `convert_failed` or `no_pose` |
 
@@ -191,9 +259,10 @@ Written by `pocketvina bust` or `posebusters=True`. See [PoseBusters checks](pos
 
 ## Pose files
 
-`poses/<protein_id>.poses` holds all poses of one protein, in the PVATLAS1 format. Part A has the best pose of every
-ligand as SDF, best first. Part B has every engine output as PDBQT, with all modes. The offset columns of the tables
-point into this file. `Results` reads the poses for you with `top_sdf()`, `pose_block()` and `pose_model()`.
+`poses/<protein_id>.poses` holds all poses of one protein, in the PVATLAS1 format. Part A has the highest-affinity
+pose of every ligand as SDF, highest-affinity first. Part B has every engine output as PDBQT, with all modes. The
+offset columns of the tables point into this file. `Results` reads the poses for you with `top_sdf()`, `pose_block()`
+and `pose_model()`.
 
 ## The "files" format
 

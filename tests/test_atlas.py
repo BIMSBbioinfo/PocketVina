@@ -26,7 +26,7 @@ from click.testing import CliRunner
 from pocketvina import cli, selection
 from pocketvina.atlas import ATLAS_URL, BEST_SCORES_COLUMNS, SEARCH_COLUMNS, SEARCH_TOP, Atlas, _Drugs
 from pocketvina.io import atlas_source, posefile
-from pocketvina.io.atlas_source import Source, pair_blocks, top_record
+from pocketvina.io.atlas_source import Source, pair_blocks, pose_records, top_record
 
 ABL1 = "P00519"
 EGFR = "P00533"
@@ -160,6 +160,191 @@ def test_source_http_retries_a_dropped_connection(atlas_server, atlas_dir, tmp_p
     assert atlas_server.cut == 0 and len(atlas_server.requests) == 5  # meta.json, then each file twice
 
 
+def test_source_http_reuses_connections(atlas_server, tmp_path, monkeypatch):
+    """Requests share a few open connections (not one each), also from several threads."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    atlas = Atlas(atlas_server.url)
+    atlas.protein("ABL1")
+    atlas.best_scores(ligand=DRUG)
+    atlas.select(ABL1, DRUG, pocket="all")
+    atlas.show(ABL1, path=tmp_path / "page.html")
+    assert len(atlas_server.requests) > 10
+    assert atlas_server.connections <= atlas_source.MAX_IDLE < len(atlas_server.requests)
+
+
+def test_source_http_kept_connection_closed_by_the_server(atlas_server, atlas_dir, tmp_path, monkeypatch):
+    """A kept connection that the server has closed in the meantime: the request goes again on a new one, at once
+    (not as a retry after a wait)."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr(atlas_source.time, "sleep", lambda s: pytest.fail("a retry after a wait"))
+    src = Source(atlas_server.url)
+    atlas_server.hang_up = 1
+    assert src.meta  # answered, then the server closes the connection without saying so
+    poses = (atlas_dir / "poses" / f"{ABL1}.poses").read_bytes()
+    assert src.range(f"poses/{ABL1}.poses", 64, 64) == poses[64:128]
+    assert atlas_server.connections == 2
+
+
+def test_source_http_follows_a_redirect(atlas_server, atlas_dir, tmp_path, monkeypatch):
+    """A permanent redirect is followed, and later requests go to the new place directly."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    src = Source(atlas_server.url + "moved/")
+    assert src.meta["release"]["label"] == "v1.1"
+    poses = (atlas_dir / "poses" / f"{ABL1}.poses").read_bytes()
+    assert src.range(f"poses/{ABL1}.poses", 8, 8) == poses[8:16]
+    assert atlas_server.requests == [("moved/meta.json", None), ("meta.json", None),
+                                     (f"poses/{ABL1}.poses", "bytes=8-15")]
+    assert src.location == atlas_server.url + "moved/"  # the release is still named by the URL it was given
+
+
+def test_source_http_retries_a_server_error(atlas_server, atlas_dir, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr(atlas_source, "RETRY_DELAYS", (0, 0, 0))
+    src = Source(atlas_server.url)
+    assert src.meta
+    poses = (atlas_dir / "poses" / f"{ABL1}.poses").read_bytes()
+    atlas_server.fail = 2
+    assert src.range(f"poses/{ABL1}.poses", 8, 8) == poses[8:16]
+    assert len(atlas_server.requests) == 4  # meta.json, then the range three times
+    atlas_server.fail = 4
+    with pytest.raises(OSError, match="the server answered HTTP 503"):
+        src.range(f"poses/{ABL1}.poses", 16, 8)
+
+
+def test_source_http_errors_through_a_proxy(atlas_server, atlas_dir, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    for name in ("no_proxy", "NO_PROXY", "HTTP_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("http_proxy", atlas_server.url)
+    src = Source("http://pocketvina-atlas.invalid/")
+    with pytest.raises(FileNotFoundError, match="proteins/XXXXXX.json.gz"):
+        src.json("proteins/XXXXXX.json")
+    end = (atlas_dir / "poses" / f"{ABL1}.poses").stat().st_size
+    with pytest.raises(ValueError, match="shorter than"):  # status 416
+        src.range(f"poses/{ABL1}.poses", end, 8)
+
+
+def test_source_http_error_keeps_the_ssl_detail(monkeypatch):
+    """A certificate error says why (e.g. a self-signed certificate)."""
+    import ssl
+
+    def refuse(url, headers, read, moved=None):
+        raise ssl.SSLCertVerificationError(1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: "
+                                              "self-signed certificate")
+
+    monkeypatch.setattr(atlas_source, "_fetch", refuse)
+    monkeypatch.setattr(atlas_source, "RETRY_DELAYS", (0, 0, 0))
+    with pytest.raises(ConnectionError, match="certificate verify failed: self-signed certificate"):
+        assert Source("https://pocketvina-atlas.invalid/").meta
+
+
+def test_source_https_uses_urllibs_certificate_rule(monkeypatch):
+    """HTTPS connections use the context urllib would (ssl._create_default_https_context, which some set to their
+    own); after a certificate error the next connection builds it again, so a fix made since then is used."""
+    import ssl
+
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    monkeypatch.setattr(ssl, "_create_default_https_context", lambda: context)
+    monkeypatch.setattr(atlas_source, "_ssl_context", None)
+    key = ("https", "pocketvina-atlas.invalid", None, os.getpid())
+    conn, reused = atlas_source._connection(key, new=True)
+    assert conn._context is context and not reused
+
+    def refuse(*args, **kwargs):
+        raise ssl.SSLCertVerificationError(1, "certificate verify failed")
+
+    monkeypatch.setattr(atlas_source.http.client.HTTPSConnection, "request", refuse)
+    with pytest.raises(ssl.SSLError):
+        atlas_source._fetch("https://pocketvina-atlas.invalid/meta.json", {}, lambda r: None)
+    fixed = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    monkeypatch.setattr(ssl, "_create_default_https_context", lambda: fixed)
+    assert atlas_source._connection(key, new=True)[0]._context is fixed
+
+
+def test_source_http_drops_connections_idle_too_long(atlas_server, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    src = Source(atlas_server.url)
+    assert src.meta
+    src.range(f"poses/{ABL1}.poses", 0, 8)
+    assert atlas_server.connections == 1  # kept and reused
+    monkeypatch.setattr(atlas_source, "IDLE_TIMEOUT", -1)
+    src.range(f"poses/{ABL1}.poses", 8, 8)
+    assert atlas_server.connections == 2
+
+
+def test_source_range_cache_is_bounded(atlas_server, atlas_dir, tmp_path, monkeypatch):
+    """The ranges kept in memory are at most RANGE_CACHE bytes: the oldest go first."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr(atlas_source, "RANGE_CACHE", 1000)
+    src = Source(atlas_server.url)
+    rel = f"poses/{ABL1}.poses"
+    poses = (atlas_dir / rel).read_bytes()
+    for offset in (0, 400, 800):
+        assert src.range(rel, offset, 250) == poses[offset:offset + 250]  # each 250 bytes: at most 4 kept
+    asked = len(atlas_server.requests)
+    assert src.range(rel, 800, 250) == poses[800:1050] and len(atlas_server.requests) == asked  # kept
+    for offset in (1200, 1600):
+        src.range(rel, offset, 250)
+    asked = len(atlas_server.requests)
+    assert src.range(rel, 0, 250) == poses[:250] and len(atlas_server.requests) == asked + 1  # gone: asked again
+    assert src._kept_bytes <= 1000
+    for _ in range(2):  # a range above a quarter of RANGE_CACHE is not kept
+        assert src.range(rel, 2000, 300) == poses[2000:2300]
+    assert len(atlas_server.requests) == asked + 3
+
+
+def test_source_and_selection_pickle(atlas_server, atlas_dir, tmp_path, monkeypatch):
+    """An Atlas, its Source and a Selection can be pickled and copied (e.g. for a process pool), locally and over
+    HTTP."""
+    import copy
+    import pickle
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    for location in (atlas_dir, atlas_server.url):
+        atlas = Atlas(location)
+        pair = atlas.select(ABL1, DRUG)
+        again = pickle.loads(pickle.dumps(pair))
+        assert again.poses.equals(pair.poses) and copy.deepcopy(atlas).source.location == atlas.source.location
+        assert again._source.atlas.source.range(f"poses/{ABL1}.poses", 0, 8) == posefile.MAGIC
+
+
+def test_source_http_through_a_proxy(atlas_server, atlas_dir, tmp_path, monkeypatch):
+    """With a proxy set (http_proxy), requests go through it (urllib reads the proxy settings)."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    for name in ("no_proxy", "NO_PROXY", "HTTP_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("http_proxy", atlas_server.url)  # the test server answers a proxy request for any host
+    src = Source("http://pocketvina-atlas.invalid/")
+    assert src.meta["release"]["label"] == "v1.1"
+    poses = (atlas_dir / "poses" / f"{ABL1}.poses").read_bytes()
+    assert src.range(f"poses/{ABL1}.poses", 8, 8) == poses[8:16]
+    assert [rel for rel, _ in atlas_server.requests] == ["meta.json", f"poses/{ABL1}.poses"]
+
+
+@pytest.mark.parametrize("source", ["local", "remote"])
+def test_source_ranges(source, request, atlas_dir, tmp_path, monkeypatch):
+    """Source.ranges gives each range as Source.range does; ranges close together come in one request, far apart
+    in one each; a range read over HTTP is not asked for again (nor one inside it)."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    src = request.getfixturevalue(source)
+    rel = f"poses/{ABL1}.poses"
+    poses = (atlas_dir / rel).read_bytes()
+    far = atlas_source.MERGE_GAP + 1000
+    asks = [(rel, 100, 10), (rel, 0, 8), (rel, 50, 0), (rel, 104, 30), (rel, far, 16), ("meta.json", 2, 5)]
+    expected = [poses[100:110], poses[:8], b"", poses[104:134], poses[far:far + 16],
+                (atlas_dir / "meta.json").read_bytes()[2:7]]
+    assert src.ranges(asks) == expected
+    if source == "remote":
+        server = request.getfixturevalue("atlas_server")
+        assert sorted(h for rel_, h in server.requests if h) == ["bytes=0-133", "bytes=2-6",
+                                                                  f"bytes={far}-{far + 15}"]
+        before = len(server.requests)
+        assert src.range(rel, 10, 20) == poses[10:30] and src.ranges(asks) == expected
+        assert len(server.requests) == before
+    with pytest.raises(ValueError, match="offset >= 0"):
+        src.ranges([(rel, -1, 4)])
+
+
 def test_source_refuses_paths_outside_the_release(local):
     for path in ("../meta.json", "proteins/../../meta.json", ""):
         with pytest.raises(ValueError, match="not a file of a PocketVina Atlas release"):
@@ -183,6 +368,8 @@ def test_pose_helpers_agree_with_the_reader(ligand, source, request, atlas_dir, 
     assert pair_blocks(src, pair.ref, pair.index) == expected
     assert top_record(src, pair.ref["file"], pair.row["top_off"], pair.row["top_len"]) == top
     assert (top is None) == (ligand == NO_TOP)
+    record = (pair.ref, pair.index, pair.row["top_off"], pair.row["top_len"])
+    assert pose_records(src, [record, record]) == [(expected, top)] * 2
 
 
 def test_pair_blocks_of_pockets_without_output(tmp_path):
@@ -769,8 +956,9 @@ def test_download_resumes_and_adds_proteins(atlas_server, atlas_dir, tmp_path, m
     assert len([rel for rel in fetched if rel.startswith("search/")]) <= 2  # only to find "EGFR"
     assert json.loads((out / "meta.json").read_text())["subset"]["proteins"] == [ABL1, EGFR]
     before = len(atlas_server.requests)
-    Atlas(atlas_server.url).download(["ABL1", "EGFR"], out)  # all there: only meta.json is read again
-    assert {rel for rel, _ in atlas_server.requests[before:]} == {"meta.json"}
+    Atlas(atlas_server.url).download(["ABL1", "EGFR"], out)  # all there: only meta.json is read again, and the
+    # size of LICENSE (MANIFEST.json does not list it) is asked for: the fixture has none (HTTP 404)
+    assert set(atlas_server.requests[before:]) == {("meta.json", None), ("LICENSE", "bytes=0-0")}
     _check_offline(out, [ABL1, EGFR], atlas_dir)
 
 
@@ -806,6 +994,66 @@ def test_download_files_the_manifest_does_not_list(atlas_dir, tmp_path, http_ser
     shutil.rmtree(release / "salt_forms")
     out = Path(Atlas(release).download(["ABL1"], tmp_path / "out2"))
     assert not (out / "salt_forms").exists() and Atlas(out).select(ABL1, DRUG).ligand == DRUG
+
+
+LICENCE = b"The licence of the data of this test release.\n"
+
+
+@pytest.mark.parametrize("source", ["local", "remote"])
+def test_download_copies_the_licence(source, atlas_dir, tmp_path, http_server, monkeypatch):
+    """LICENSE, which the release's MANIFEST.json does not list, is copied as it is (checked by size) and listed in
+    the folder's MANIFEST.json, so a download of the download has it too, checked by sha256. A source without it (the
+    fixture, an older release, a download made without it, or one whose MANIFEST.json lists it but has lost it) is
+    downloaded without it, with no error."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    (release / "LICENSE").write_bytes(LICENCE)
+    location = release if source == "local" else http_server(release).url
+    out = Path(Atlas(location).download(["ABL1"], tmp_path / "out"))
+    again = Path(Atlas(out).download(["ABL1"], tmp_path / "again"))  # a download of the download
+    for folder in (out, again):
+        assert (folder / "LICENSE").read_bytes() == LICENCE
+        assert json.loads((folder / "MANIFEST.json").read_text())["files"]["LICENSE"] == {
+            "bytes": len(LICENCE), "sha256": hashlib.sha256(LICENCE).hexdigest()}
+    (again / "LICENSE").write_bytes(LICENCE.upper())  # damaged, same size: out's MANIFEST.json has its sha256
+    Atlas(out).download(["ABL1"], again)
+    assert (again / "LICENSE").read_bytes() == LICENCE  # copied again
+    (again / "LICENSE").unlink()  # its MANIFEST.json still lists it
+    lost = Path(Atlas(again).download(["ABL1"], tmp_path / "lost"))
+    (release / "LICENSE").unlink()
+    out = Path(Atlas(location).download(["ABL1"], tmp_path / "without"))
+    again = Path(Atlas(out).download(["ABL1"], tmp_path / "without_again"))
+    for folder in (lost, out, again):
+        assert not (folder / "LICENSE").exists()
+        assert "LICENSE" not in json.loads((folder / "MANIFEST.json").read_text())["files"]
+        assert Atlas(folder).select(ABL1, DRUG).ligand == DRUG
+
+
+def test_download_resumes_with_the_licence(atlas_dir, tmp_path, http_server, monkeypatch):
+    """A LICENSE in the folder is kept if it has the size of the release's, else copied again (no sha256 is listed
+    for it); a folder that has a LICENSE cut short and the folders of a download that stopped is gone on with. A folder
+    with only a LICENSE is not a download's: it is left as it is, with an error."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    (release / "LICENSE").write_bytes(LICENCE)
+    server = http_server(release)
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "LICENSE").write_bytes(LICENCE[:5])
+    with pytest.raises(ValueError, match=r"is not empty \(it has LICENSE\): download\(\) writes into a new or empty"):
+        Atlas(server.url).download(["ABL1"], out)
+    assert [p.name for p in out.iterdir()] == ["LICENSE"] and (out / "LICENSE").read_bytes() == LICENCE[:5]
+    (out / "proteins").mkdir()  # a download that stopped: the folders of the files it was copying are there
+    Atlas(server.url).download(["ABL1"], out)
+    assert (out / "LICENSE").read_bytes() == LICENCE
+    for extra, copied in ((b"", False), (b"more", True)):
+        (out / "LICENSE").write_bytes(LICENCE + extra)
+        before = len(server.requests)
+        Atlas(server.url).download(["ABL1"], out)
+        asked = [request for request in server.requests[before:] if request[0] == "LICENSE"]
+        assert asked == [("LICENSE", "bytes=0-0")] + ([("LICENSE", None)] if copied else [])  # its size, the copy
+        assert (out / "LICENSE").read_bytes() == LICENCE
+    assert not list(tmp_path.glob("out/**/*.tmp-*"))
 
 
 def test_download_arguments_and_folders(atlas, atlas_dir, tmp_path):
@@ -924,12 +1172,20 @@ def test_cli_atlas_errors(atlas_dir, closed_port, tmp_path, monkeypatch):
     monkeypatch.setattr(atlas_source, "RETRY_DELAYS", (0, 0, 0))
     (tmp_path / "busy").mkdir()
     (tmp_path / "busy" / "notes.txt").write_text("mine")
+    (tmp_path / "poses").write_text("mine")  # a file: --out poses is a folder
     here = shlex.quote(str(atlas_dir))
     said = {
         ("show", "NOSUCHGENE", "--atlas", atlas_dir): ("no protein 'NOSUCHGENE'", "; pocketvina atlas search "
                                                        f"NOSUCHGENE --atlas {here} finds part of a name"),
         ("export", "ABL1", "no such drug"): ("no drug 'no such drug'", "pocketvina atlas search 'no such drug' finds"),
         ("export", "ABL1", DRUG, "--out", "x.pdbqt", "--atlas", atlas_dir): ("pass --fmt pdbqt for a PDBQT file",),
+        ("export", "ABL1", DRUG, "--protein", "--out", "abl1.pdb", "--atlas", atlas_dir): (
+            f"{tmp_path / 'abl1.pdb'}: poses are written as SDF; use a .sdf name, or --fmt pdbqt for .pdbqt",),
+        ("export", "ABL1", DRUG, "--fmt", "pdbqt", "--out", "x.txt", "--atlas", atlas_dir): (
+            f"{tmp_path / 'x.txt'}: poses are written as PDBQT; use a .pdbqt name, or --fmt sdf for .sdf",),
+        ("export", "ABL1", DRUG, "--protein", "--out", "poses", "--atlas", atlas_dir): (
+            f"Error: {tmp_path / 'poses'} is a file, but a path without an extension is a folder: use e.g. poses.sdf "
+            "for a file\n",),
         ("search", "ABL1", "--atlas", closed_port): ("cannot reach the PocketVina Atlas", "use --atlas /path/to/"),
         ("search", "ABL1", "--atlas", tmp_path): ("is not a PocketVina Atlas release", "use --atlas /path/to/release",
                                                   "or no --atlas for the public release"),
@@ -942,6 +1198,8 @@ def test_cli_atlas_errors(atlas_dir, closed_port, tmp_path, monkeypatch):
         out = run("atlas", *args, ok=False).output
         assert all(part in out for part in parts), args
         assert not any(python in out for python in ("atlas.search(", "Atlas(", "download()", "fmt=")), args
+    assert not any(tmp_path.glob("*.pdb")) and not (tmp_path / "x.txt").exists()  # nothing written
+    assert (tmp_path / "poses").read_text() == "mine"
     with pytest.raises(KeyError, match=r"; atlas\.search\('NOSUCHGENE'\) finds part of a name"):
         Atlas(atlas_dir).protein("NOSUCHGENE")  # Python keeps its own hints
 

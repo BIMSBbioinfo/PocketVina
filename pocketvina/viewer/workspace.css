@@ -38,6 +38,7 @@ p { margin: 0; }
 .dt tbody tr { cursor: pointer; }
 .dt tbody tr:hover, .dt tbody tr[data-active=true] { background: var(--sec); }
 .dt .r { text-align: right; }
+.dt th.wrap { white-space: normal; line-height: 1.2; }  /* a long header may wrap */
 .dt .trunc { max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
 .scroll-x { overflow-x: auto; max-width: 100%; }
 .kv { display: grid; grid-template-columns: 112px minmax(0, 1fr); column-gap: 16px; font-size: 14px; margin: 16px 0 0; }

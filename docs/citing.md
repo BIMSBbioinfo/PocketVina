@@ -188,10 +188,30 @@ RDKit builds the 3D ligands from SMILES and writes the poses as SDF. Open Babel 
 
 ## Licences
 
+The package and the data of the PocketVina Atlas have separate licences.
+
+### PocketVina (this package)
+
 PocketVina is released under the [MIT licence](https://github.com/BIMSBbioinfo/PocketVina/blob/main/LICENSE). The
 docking engine is based on AutoDock Vina and QuickVina2-GPU-2.1 and keeps their Apache License 2.0. The notices are
 in the source files. The bundled Mol\* viewer is MIT licensed, with its licence files in
 `pocketvina/viewer/molstar-pv-5.13.1/`.
+
+### PocketVina Atlas (the data)
+
+The data that `pocketvina.Atlas` reads from the [PocketVina Atlas](atlas.md) has its own licence:
+
+The atlas's own results (poses, scores, pockets and PoseBusters checks) are under the
+[MIT licence](https://opensource.org/license/mit). Data from other resources keeps its licence: AlphaFold DB models
+([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)), UniProt names and annotation
+([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)), ChEMBL data, including the evidence flags derived from it
+([CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/)), and Open Targets diseases
+([CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)). The compound names and SMILES come from the vendor
+library; their redistribution terms are being checked.
+
+Copyright (c) 2026 Akalin Lab, Max Delbrück Center.
+
+The licence is also on the [Atlas website](https://pocketvina-atlas.mdc-berlin.de/downloads/#licence).
 
 ## Acknowledgements
 

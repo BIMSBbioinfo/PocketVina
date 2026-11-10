@@ -254,7 +254,7 @@ def test_quickstart_python_runs(tmp_path, fake_engine_env, stub_p2rank):
     assert "Best scores:" in ns["_stdout"] and ns["pocketvina"].failed_proteins == {}
     best = ns["pocketvina"].best_scores()
     assert list(best.columns) == list(BEST_SCORES_COLUMNS) and len(best) == 2 * len(EXAMPLE_LIGANDS)
-    pair = ns["pair"]  # the last selection: every mode of the best pocket
+    pair = ns["pair"]  # the last selection: all modes of the pocket of the highest-affinity pose
     assert pair.name == f"PV_1fbl_molecule1_pk{pair.best_pocket}_modes"
     for name in ("PV_results.html", "results.html", f"{pair.name}.html", f"{pair.name}.sdf", "PV_1fbl.pdb"):
         assert (tmp_path / name).is_file(), name
@@ -290,6 +290,6 @@ def test_selection_table_names_the_files_export_writes(tmp_path, fake_engine_env
     for args, name in rows:
         kwargs = {} if args.startswith("(") else eval(f"dict({args.strip('`')})")
         pair = pv.select(protein="1fbl", ligand="molecule1", **kwargs)
-        if "if pocket 1 is best" in text and kwargs == {"mode": "all"} and pair.best_pocket != 1:
+        if "if pocket 1 has the highest-affinity pose" in text and kwargs == {"mode": "all"} and pair.best_pocket != 1:
             continue
         assert os.path.basename(pair.export(tmp_path / "out")) == name, (args, name)

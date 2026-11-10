@@ -701,6 +701,6 @@ class ProteinWriter:
             poses_bytes=info["file_size"], section_a_bytes=info["section_a_bytes"],
             section_b_bytes=info["section_b_bytes"], raw_pdbqt_bytes=sum(r.raw_length for r in runs),
             raw_sdf_bytes=sum(t[2] for t in top.values()))
-        logger.info("%s: %d runs, %d modes, %d best poses, pose file %d bytes", pid, n, m, len(top),
+        logger.info("%s: %d runs, %d modes, %d highest-affinity poses, pose file %d bytes", pid, n, m, len(top),
                     info["file_size"])
         return staged

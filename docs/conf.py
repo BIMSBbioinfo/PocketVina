@@ -65,10 +65,11 @@ html_theme_options = {
     "source_directory": "docs/",
 }
 # the example 3D pages of visualisation.md (written by show() for the quick start run) and of atlas.md (by
-# Atlas.show() on the test fixture)
+# docs/atlas_outputs.py, from the public Atlas), and the style of output blocks (pocketvina.css)
 html_static_path = ["_static"]
-pygments_style = "sphinx"
-pygments_dark_style = "monokai"
+html_css_files = ["pocketvina.css"]
+pygments_style = "github-light"  # code blocks in GitHub's colours, as on the PocketVina Atlas website
+pygments_dark_style = "github-dark"
 
 # --- docstrings and click help as reStructuredText -------------------------------------------------------------------
 

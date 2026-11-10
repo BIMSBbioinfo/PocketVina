@@ -1,0 +1,40 @@
+/* An output block (```{code-block} text with :class: pv-output, e.g. in atlas.md): set apart from the code above it. */
+div.pv-output pre {
+  background: var(--color-background-secondary);
+  border-left: 3px solid var(--color-background-border);
+}
+
+/* Code blocks in light mode: GitHub's own background, so a block stands out on the white page (the github-light
+   Pygments style paints it white). Only the light cases -- the light theme, and furo's "auto" on a light system --
+   because in dark the background comes from the github-dark style. Painted on div.highlight, where the Pygments
+   styles paint it, so an output block's own pre background (above) still covers it. */
+body[data-theme="light"] div.highlight {
+  background: #f6f8fa;
+}
+@media (prefers-color-scheme: light) {
+  body:not([data-theme="dark"]) div.highlight {
+    background: #f6f8fa;
+  }
+}
+
+/* Light mode, keyed like the rule above (the light theme, and "auto" on a light system); dark mode is left as it is.
+   Comments: GitHub's #6e7781 is 4.27:1 on #f6f8fa, under WCAG AA (4.5:1); #656d76, GitHub's own darker muted grey,
+   is 4.93:1. Output blocks: white with a thin border, so they do not look like the tinted code blocks. */
+body[data-theme="light"] div.highlight :is(.c, .ch, .cm, .cp, .cpf, .c1, .cs) {
+  color: #656d76;
+}
+body[data-theme="light"] div.pv-output pre {
+  background: #ffffff;
+  border: 1px solid #d0d7de;
+  border-left-width: 3px;
+}
+@media (prefers-color-scheme: light) {
+  body:not([data-theme="dark"]) div.highlight :is(.c, .ch, .cm, .cp, .cpf, .c1, .cs) {
+    color: #656d76;
+  }
+  body:not([data-theme="dark"]) div.pv-output pre {
+    background: #ffffff;
+    border: 1px solid #d0d7de;
+    border-left-width: 3px;
+  }
+}

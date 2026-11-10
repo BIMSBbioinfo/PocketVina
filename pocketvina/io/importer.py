@@ -304,7 +304,7 @@ def import_legacy(output_dir: str, results_dir: str, smiles_file: Optional[str] 
     warning. Ligands are numbered in the order of ``smiles_file`` (``molecule_name,smiles``; ligands of the run that
     it lacks follow), else by name. The docked pockets are those with an engine output or config; a ligand without
     output in one of them gets a "no_output" run, a ligand of ``smiles_file`` that the legacy run never prepared a
-    "skipped" one. Section A holds the best pose of each ligand as SDF
+    "skipped" one. Section A holds the highest-affinity pose of each ligand as SDF
     (``pocketvina.convert``) when its SMILES is known; without SMILES it stays empty and ``sdf_status`` is
     "convert_failed". Box sizes come from ``configs/`` when kept, else they are NaN. Docked pockets ranked above
     127 do not fit the int8 pocket columns: they are left out with a warning and noted in the proteins table.

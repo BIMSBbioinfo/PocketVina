@@ -39,16 +39,21 @@ molecule2,CC(C)(C)NCC(O)c1ccc(O)c(CO)c1
 
 ### Make the protein list
 
-Activate the environment and list the example proteins:
+Activate the environment:
 
 ```bash
 conda activate pocketvina
-ls example/proteins/*.pdb > proteins.txt    # one protein structure file per line
+```
+
+List the example proteins in `proteins.txt`, one structure file per line:
+
+```bash
+ls example/proteins/*.pdb > proteins.txt
 ```
 
 ### Dock
 
-Set up the run and start it:
+Set up the run: the proteins, the ligands, the results folder and the settings of P2Rank and of the docking box:
 
 ```python
 from pocketvina import PocketVinaGPU, PocketVinaConfig, P2RankConfig, PocketConfig
@@ -73,35 +78,99 @@ config = PocketVinaConfig(
         thread=8000,
     ),
 )
+```
 
-pocketvina = PocketVinaGPU(config, htvs_mode=True)   # docks the 5 best pockets of each protein
+Create the run. With `htvs_mode=True`, it docks the 5 best pockets of each protein:
+
+```python
+pocketvina = PocketVinaGPU(config, htvs_mode=True)
+```
+
+Start it. `execute_docking()` finds the pockets, docks every ligand and then shows the lowest Vina score of each
+protein and ligand:
+
+```python
 pocketvina.execute_docking()
 ```
 
-`execute_docking()` finds the pockets, docks every ligand and then shows the best score of each protein and ligand.
-
 ### Look at the results
 
-Show the best scores, the 3D page, or the poses of one protein and ligand:
+`best_scores()` shows the lowest Vina score of each protein and ligand:
 
 ```python
-pocketvina.best_scores()                        # the best Vina score of each protein x ligand
-pocketvina.best_scores(protein="1fbl", top=5)   # the 5 best ligands of one protein
-pocketvina.show()                               # all results in 3D
-pocketvina.show(path="results.html")            # the same, as a web page
-
-pair = pocketvina.select(protein="1fbl", ligand="molecule1")                    # the best pose
-pair = pocketvina.select(protein="1fbl", ligand="molecule1", pocket=2, mode=3)  # mode 3 in pocket 2
-pair = pocketvina.select(protein="1fbl", ligand="molecule1", pocket="all")      # the best pose in each pocket
-pair = pocketvina.select(protein="1fbl", ligand="molecule1", mode="all")        # all modes of the best pocket
-pair.show()             # 3D view
-pair.bust()             # PoseBusters checks
-pair.export()           # saves PV_1fbl_molecule1_pk1_modes.sdf
-pair.export_protein()   # saves PV_1fbl.pdb
+pocketvina.best_scores()
 ```
 
-In Jupyter, Colab or VS Code, `show()` draws the 3D page below the cell. In a script it writes an HTML file. See
-[3D views](visualisation.md) and [PoseBusters checks](posebusters.md) for more.
+With `protein` and `top`, it shows the 5 ligands with the lowest Vina score on one protein:
+
+```python
+pocketvina.best_scores(protein="1fbl", top=5)
+```
+
+`show()` draws all results in 3D. In Jupyter, Colab or VS Code the page appears below the cell. In a script it is
+saved as an HTML file:
+
+```python
+pocketvina.show()
+```
+
+With `path`, it saves the page to that file, to open in a browser or to share:
+
+```python
+pocketvina.show(path="results.html")
+```
+
+### One protein and ligand
+
+`select()` takes the poses of one protein and ligand. Without more, it takes the highest-affinity pose:
+
+```python
+pair = pocketvina.select(protein="1fbl", ligand="molecule1")
+```
+
+With `pocket` and `mode`, it takes mode 3 in pocket 2:
+
+```python
+pair = pocketvina.select(protein="1fbl", ligand="molecule1", pocket=2, mode=3)
+```
+
+With `pocket="all"`, it takes the highest-affinity pose in each pocket:
+
+```python
+pair = pocketvina.select(protein="1fbl", ligand="molecule1", pocket="all")
+```
+
+With `mode="all"`, it takes all modes of the pocket of the highest-affinity pose:
+
+```python
+pair = pocketvina.select(protein="1fbl", ligand="molecule1", mode="all")
+```
+
+The next steps work on this last selection. `show()` draws it in 3D:
+
+```python
+pair.show()
+```
+
+`bust()` runs the PoseBusters checks on its poses:
+
+```python
+pair.bust()
+```
+
+`export()` saves its poses as an SDF file, such as `PV_1fbl_molecule1_pk1_modes.sdf`:
+
+```python
+pair.export()
+```
+
+With `protein=True`, it also saves the protein as `PV_1fbl.pdb`:
+
+```python
+pair.export(protein=True)
+```
+
+See [3D views](visualisation.md) and [PoseBusters checks](posebusters.md) for more.
 
 ## GPU
 
@@ -111,18 +180,33 @@ over parts of the protein list. See [GPUs and GPU sharing](gpu-sharing.md).
 
 ## Results of an earlier run
 
-You can open the results of an earlier session, or of a run on a cluster, with `Results`:
+You can open the results of an earlier session, or of a run on a cluster, with `Results`. Give it the `output_dir`
+of the run:
 
 ```python
 from pocketvina import Results
 
-res = Results("results")      # the output_dir of the run
-res.best_scores()
-res.show()
-pair = res.select(protein="1fbl", ligand="molecule1")
+res = Results("results")
 ```
 
-`Results` has the same `best_scores()`, `show()` and `select()` as the run.
+`Results` has the same `best_scores()`, `show()` and `select()` as the run. The lowest Vina score of each protein and
+ligand:
+
+```python
+res.best_scores()
+```
+
+All results in 3D:
+
+```python
+res.show()
+```
+
+The highest-affinity pose of one protein and ligand:
+
+```python
+pair = res.select(protein="1fbl", ligand="molecule1")
+```
 
 ## Choose the pockets
 
@@ -139,16 +223,27 @@ Set one of these in `PocketVinaConfig`, and create the run with `PocketVinaGPU(c
 
 ## P2Rank first, docking later
 
-You can find the pockets of a whole proteome once, then dock one or more ligand libraries into them:
+You can find the pockets of a whole proteome once, then dock one or more ligand libraries into them.
+
+Set up P2Rank. Use `model="alphafold"` for AlphaFold models:
 
 ```python
-from pocketvina import P2RankConfig, P2RankProcessor, PocketVinaConfig, PocketVinaGPU
+from pocketvina import P2RankConfig, P2RankProcessor
 
-# 1. the pockets of every protein in proteins.txt, saved as pockets/proteins/pockets/<protein>.csv
-p2rank = P2RankProcessor(P2RankConfig(output_dir="pockets", model="default", threads=8))  # "alphafold" for AF models
+p2rank = P2RankProcessor(P2RankConfig(output_dir="pockets", model="default", threads=8))
+```
+
+Find the pockets of every protein in `proteins.txt`. They are saved as `pockets/proteins/pockets/<protein>.csv`:
+
+```python
 p2rank.process_file_list("proteins.txt")
+```
 
-# 2. docking into these pockets: P2Rank is not run again
+Set up the docking into these pockets. With `pockets_dir`, P2Rank is not run again:
+
+```python
+from pocketvina import PocketVinaConfig, PocketVinaGPU
+
 config = PocketVinaConfig(
     protein_paths="proteins.txt",
     smiles_file="example/ligands.txt",
@@ -156,6 +251,11 @@ config = PocketVinaConfig(
     output_format="atlas",
     pockets_dir="pockets/proteins/pockets",
 )
+```
+
+Start the docking:
+
+```python
 PocketVinaGPU(config, htvs_mode=True).execute_docking()
 ```
 
@@ -178,23 +278,42 @@ output folder of version 0.1.
 
 ## Command line
 
-You can run the same steps from the command line:
+You can run the same steps from the command line. A results folder holds one run with one set of settings, so if
+`results/` is left from the Python run, use another `--out`.
+
+`dock` docks the ligands, here into the 2 best-ranked pockets of each protein:
 
 ```bash
 pocketvina dock --proteins example/proteins --ligands example/ligands.txt --out results --top-pockets 2
+```
+
+`info` shows the settings and counts of a run:
+
+```bash
 pocketvina info --results results
+```
+
+`export` writes the highest-affinity poses as SDF files:
+
+```bash
 pocketvina export --results results --what best --format sdf --out best_poses
+```
+
+`--help` lists all commands:
+
+```bash
 pocketvina --help
 ```
 
-`dock` docks the ligands, `info` shows the settings and counts of a run, and `export` writes the best poses as SDF
-files. A results folder holds one run with one set of settings. If `results/` is left from the Python run, use
-another `--out`.
-
-Two more commands you will often use:
+Two more commands you will often use. `query best` lists the 10 highest-affinity protein x ligand pairs:
 
 ```bash
-pocketvina query best --results results --top 10      # the 10 best protein x ligand pairs
+pocketvina query best --results results --top 10
+```
+
+`show` saves the 3D view of the highest-affinity pose of a protein and ligand as a web page:
+
+```bash
 pocketvina show --results results --protein 1fbl --ligand molecule1 --out pose.html
 ```
 

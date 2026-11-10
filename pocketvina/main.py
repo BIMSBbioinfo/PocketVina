@@ -312,7 +312,8 @@ class PocketVinaConfig:
     - num_modes, energy_range: poses kept per ligand and pocket, and their score range (default 20 within 20 kcal/mol).
     - ligand_prep: "standard" (largest fragment, seeded 3D) or "legacy" (as before v0.2, to regenerate old results).
     - gzip_level: compression level of the "atlas" pose files (-1 to 9, default 6).
-    - posebusters: "atlas" only: check the best pose of each ligand with PoseBusters while docking (default False).
+    - posebusters: "atlas" only: check the highest-affinity pose of each ligand with PoseBusters while docking
+      (default False).
     - posebusters_workers: processes for the PoseBusters checks (default the CPUs available, at most 16).
     - ligands_per_call: "atlas" only: ligands per engine call (default batch_size if set, else 1000; 0: all at once).
     - engine_timeout: seconds one engine call may take; a slower call is stopped (default no limit).
@@ -961,8 +962,8 @@ class PocketVinaGPU:
         """Main docking execution with better error handling
 
         With ``output_format="atlas"`` this is ``pipeline.run_atlas`` and returns the results directory; at the end
-        it shows the best scores of the run's proteins (``best_scores()``, at most ``BEST_SCORES_SHOWN`` rows): a
-        table in a notebook, else printed.
+        it shows the lowest Vina score of each of the run's protein x ligand pairs (``best_scores()``, at most
+        ``BEST_SCORES_SHOWN`` rows): a table in a notebook, else printed.
         """
         print(CITATION, flush=True)
         if self.config.output_format == "atlas":
@@ -1078,7 +1079,7 @@ class PocketVinaGPU:
         return Results(self.output_dir)
 
     def best_scores(self, protein=None, top: Optional[int] = None) -> pd.DataFrame:
-        """Best (lowest) Vina score of each protein x ligand, best first; see ``Results.best_scores``.
+        """Lowest Vina score of each protein x ligand, highest-affinity first; see ``Results.best_scores``.
 
         protein: a protein id (the file name without extension), e.g. "1fbl", or a list, e.g. ["1fbl", "2W83"];
         None (default): all proteins.
@@ -1094,9 +1095,10 @@ class PocketVinaGPU:
 
         protein: a protein id as in best_scores(), e.g. "1fbl".
         ligand: a ligand id (its name in the SMILES file) as in best_scores(), e.g. "molecule1".
-        pocket: a pocket number, e.g. 2; None (default): the pocket of the pair's best pose; "all": every pocket the
-            ligand was docked into.
-        mode: 1 (default): the best mode of the pocket; 2, 3, ...: that mode; "all": every mode of the pocket(s).
+        pocket: a pocket number, e.g. 2; None (default): the pocket of the pair's highest-affinity pose; "all": every
+            pocket the ligand was docked into.
+        mode: 1 (default): the highest-affinity mode of the pocket; 2, 3, ...: that mode; "all": every mode of the
+            pocket(s).
         """
         with self.results() as res:
             return res.select(protein, ligand, pocket=pocket, mode=mode)
@@ -1111,7 +1113,7 @@ class PocketVinaGPU:
         molstar: "inline" (default, works offline) or "url" (the 3D viewer's code from the PocketVina Atlas website).
         theme: "auto" (default), "light" or "dark".
         height: height of the view in a notebook, in pixels, e.g. 900.
-        max_ligands: ligands per protein in the page (best first), e.g. 50; None: all.
+        max_ligands: ligands per protein in the page (highest-affinity first), e.g. 50; None: all.
         """
         with self.results() as res:
             return res.show(protein, path=path, molstar=molstar, theme=theme, height=height, max_ligands=max_ligands)
@@ -1130,8 +1132,8 @@ class PocketVinaGPU:
             if not total:
                 print("No docked poses in this run.")
                 return
-            more = (f"Best {len(df)} of {total} protein x ligand pairs; pocketvina.best_scores() returns all of them."
-                    if total > len(df) else None)
+            more = (f"The top {len(df)} of {total} protein x ligand pairs; pocketvina.best_scores() returns all "
+                    "of them." if total > len(df) else None)
             # IPython imported and running (Jupyter, Colab, VSCode; get_ipython() is None in a plain script)
             shell = getattr(sys.modules.get("IPython"), "get_ipython", lambda: None)()
             if shell is not None:

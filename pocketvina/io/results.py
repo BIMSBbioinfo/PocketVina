@@ -198,10 +198,10 @@ class Results:
         return self.table("modes", protein, columns)
 
     def pairs(self, protein: ProteinArg = None, columns: Optional[List[str]] = None) -> pd.DataFrame:
-        """Best pose per protein x ligand: the ``pairs`` table, then ``pb_valid`` (only when there are PoseBusters
-        results, see ``posebusters``) and ``ligand_efficiency`` (``-vina / n_heavy``, heavy atoms of the docked
-        fragment; NaN without a pose). ``pb_status`` / ``pb_valid`` are those of the PoseBusters row of the best pose
-        (same pocket and mode), if any. ``columns`` may name these derived columns too."""
+        """Highest-affinity pose per protein x ligand: the ``pairs`` table, then ``pb_valid`` (only when there are
+        PoseBusters results, see ``posebusters``) and ``ligand_efficiency`` (``-vina / n_heavy``, heavy atoms of the
+        docked fragment; NaN without a pose). ``pb_status`` / ``pb_valid`` are those of the PoseBusters row of the
+        highest-affinity pose (same pocket and mode), if any. ``columns`` may name these derived columns too."""
         cols = list(columns) if columns is not None else None
         if protein is not None and not isinstance(protein, str):
             protein = list(protein)  # read twice (pairs parts, then posebusters parts): a generator would be used up
@@ -221,9 +221,9 @@ class Results:
         return df if cols is None else df[cols]
 
     def best_scores(self, protein: ProteinArg = None, top: Optional[int] = None) -> pd.DataFrame:
-        """Best (lowest) Vina score of each protein x ligand, best first: one row per docked pair with protein_id,
-        ligand_id, vina (kcal/mol), best_pocket, best_mode, ligand_efficiency (-vina / heavy atoms); no PoseBusters
-        columns, also when PoseBusters ran (see ``posebusters()``). Ligands without a pose are left out.
+        """Lowest Vina score of each protein x ligand, highest-affinity first: one row per docked pair with
+        protein_id, ligand_id, vina (kcal/mol), best_pocket, best_mode, ligand_efficiency (-vina / heavy atoms); no
+        PoseBusters columns, also when PoseBusters ran (see ``posebusters()``). Ligands without a pose are left out.
 
         protein: a protein id (the file name without extension), e.g. "1fbl", or a list, e.g. ["1fbl", "2W83"];
         None (default): all proteins.
@@ -239,9 +239,10 @@ class Results:
 
         protein: a protein id as in best_scores(), e.g. "1fbl".
         ligand: a ligand id (its name in the SMILES file) as in best_scores(), e.g. "molecule1".
-        pocket: a pocket number, e.g. 2; None (default): the pocket of the pair's best pose; "all": every pocket the
-            ligand was docked into.
-        mode: 1 (default): the best mode of the pocket; 2, 3, ...: that mode; "all": every mode of the pocket(s).
+        pocket: a pocket number, e.g. 2; None (default): the pocket of the pair's highest-affinity pose; "all": every
+            pocket the ligand was docked into.
+        mode: 1 (default): the highest-affinity mode of the pocket; 2, 3, ...: that mode; "all": every mode of the
+            pocket(s).
         """
         from ..selection import select
 
@@ -260,7 +261,8 @@ class Results:
             PocketVina Atlas website when the page opens (a much smaller page; needs internet).
         theme: "auto" (default: as the browser), "light" or "dark".
         height: height of the view in a notebook, in pixels, e.g. 900.
-        max_ligands: ligands per protein in the page (best first), e.g. 50; None: all (a large page for a large run).
+        max_ligands: ligands per protein in the page (highest-affinity first), e.g. 50; None: all (a large page for
+            a large run).
         """
         from .. import workspace
 
@@ -381,8 +383,9 @@ class Results:
         ``posebusters`` when there are PoseBusters results (see ``posebusters``).
 
         The ``pairs`` view has the columns of ``pairs()``: the ``pairs`` table with ``pb_status`` / ``pb_valid`` of
-        the PoseBusters row of the best pose (same pocket and mode; ``pb_valid`` is NULL without one, also when there
-        are no PoseBusters results) and ``ligand_efficiency`` (``-vina / n_heavy``, NULL if ``n_heavy`` is unknown).
+        the PoseBusters row of the highest-affinity pose (same pocket and mode; ``pb_valid`` is NULL without one,
+        also when there are no PoseBusters results) and ``ligand_efficiency`` (``-vina / n_heavy``, NULL if
+        ``n_heavy`` is unknown).
         """
         import duckdb
 
@@ -499,7 +502,7 @@ class Results:
         return _text(pdbqt.model(self._block(protein, ligand, pocket), operator.index(mode)))
 
     def top_sdf(self, protein: str, ligand) -> Optional[str]:
-        """SDF of the ligand's best pose in the protein (section A), or None if there is none."""
+        """SDF of the ligand's highest-affinity pose in the protein (section A), or None if there is none."""
         pid, i = self._protein(protein), self.ligand_idx(ligand)
         reader = self._reader(pid)
         if i >= reader.N:
@@ -601,11 +604,12 @@ class Results:
     def export(self, out_dir, what: str = "best", fmt: str = "sdf", protein: ProteinArg = None) -> List[str]:
         """Write poses or tables as plain files under ``out_dir``; returns the paths written.
 
-        - ``fmt="sdf"``: ``what="best"`` the stored best pose per protein x ligand
+        - ``fmt="sdf"``: ``what="best"`` the stored highest-affinity pose per protein x ligand
           (``<protein_id>/<protein_id>-pocket<k>-<ligand>_best.sdf``); ``what="all"`` every mode of every engine
           output converted with ``pocketvina.convert`` (needs the docked SMILES;
           ``<protein_id>/<protein_id>-pocket<k>-<ligand>_out.sdf``, modes that do not convert are left out).
-        - ``fmt="pdbqt"``: the best MODEL (``..._best.pdbqt``), or every engine output as written (``..._out.pdbqt``).
+        - ``fmt="pdbqt"``: the MODEL of the highest-affinity pose (``..._best.pdbqt``), or every engine output as
+          written (``..._out.pdbqt``).
         - ``fmt="csv"``: ``best_poses.csv`` (the pairs table), or ``combined_results.csv`` (``to_combined_csv``).
         """
         if what not in EXPORT_WHAT:

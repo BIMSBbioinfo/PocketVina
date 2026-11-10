@@ -57,7 +57,7 @@
   let D = null, A = null;
   const S = {
     prot: null, row: null,                       // the protein shown, the selected pair (a row of prot.rows) or null
-    view: 'best', pk: null, mode: null,          // 'best': the pair's best pose (its SDF); 'modes': mode `mode` of pocket `pk` (PDBQT)
+    view: 'best', pk: null, mode: null,          // 'best': the pair's highest-affinity pose (its SDF); 'modes': mode `mode` of pocket `pk` (PDBQT)
     allModes: false,
     show: [], userShow: false, selShow: [],      // surfaces asked for; a chip was used (selections keep the surfaces); the selection's own
     focusPocket: null, focusRes: null, hidden: [], pstyle: 'cartoon',
@@ -92,7 +92,7 @@
     if (row) S.tab = 'pair';
     update();
   }
-  // from the best pose the arrows move into its pocket's modes; within the modes they step and stop at both ends
+  // from the highest-affinity pose the arrows move into its pocket's modes; within the modes they step and stop at both ends
   function step(d) {
     if (!S.row) return;
     if (S.view === 'best') { choose(S.row, S.pk, Math.max(1, S.mode + d), 'modes'); return; }
@@ -193,7 +193,7 @@
     const m = ev.data.m; if (m && typeof m === 'object') fromFrame(m);
   });
 
-  // ------------------------------------------------------------ files: a download, and what to do where a notebook blocks it
+  // ------------------------------------------------------------ files: a download, and what to do where downloads are blocked
   function download(blob, name) {
     const url = URL.createObjectURL(blob), a = document.createElement('a');
     a.href = url; a.download = name; a.rel = 'noopener'; a.style.display = 'none';
@@ -207,7 +207,7 @@
   }
   function saveText(text, name, type) {
     download(new Blob([text], { type }), name);
-    toast(`Saved ${name}. Nothing downloaded? This notebook blocks downloads: use pair.export() in Python.`);
+    toast(`Saved ${name}. Nothing downloaded? Downloads are blocked here: in Python, pair.export() writes the poses and pair.export(protein=True) the protein too.`);
   }
   const dataUrlBlob = url => { const [head, b64] = url.split(','), bin = atob(b64), a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return new Blob([a], { type: head.slice(5).split(';')[0] }); };
   async function saveImage() {
@@ -223,7 +223,7 @@
     } catch (e) { toast('Save image failed: ' + (e && e.message || e)); }
     finally { S.imageBusy = false; update(); }
   }
-  // the image just saved and a hint, also where the notebook blocks downloads (right-click > Save image as)
+  // the image just saved and a hint, also for where downloads are blocked (right-click > Save image as)
   function showShot(x, name) {
     const box = document.getElementById('pv-shot');
     box.innerHTML = `<div class="pv-shot-box" role="dialog" aria-label="Image saved"><div class="pv-shot-head"><span>Saved <b class="mono">${esc(name)}</b> `
@@ -330,7 +330,7 @@
           + `<input type="search" class="pv-search" id="pv-q" placeholder="Search ligands (name or SMILES)" aria-label="Search ligands" value="${esc(S.q)}">`
           + `<div class="scroll-x"><table class="dt"><thead><tr><th class="r">#</th><th>Ligand</th><th class="r">Vina</th><th>Pocket</th><th class="r">Mode</th><th class="r" title="Ligand efficiency: −Vina / heavy atoms">LE</th></tr></thead>`
           + `<tbody id="pv-rows"></tbody></table></div>`
-          + (P.topNote == null && P.n > listed ? `<p class="pv-note">The best ${int(listed)} of ${int(P.n)} ligands docked into ${esc(protName(P))} (max_ligands=${int(D.maxLigands)}).</p>` : '')
+          + (P.topNote == null && P.n > listed ? `<p class="pv-note">The top ${int(listed)} of ${int(P.n)} ligands docked into ${esc(protName(P))} (max_ligands=${int(D.maxLigands)}).</p>` : '')
           + `<p class="pv-note">Vina: highest affinity of the pair (its lowest AutoDock Vina score over all pockets and modes, kcal/mol; more negative is better). Pocket and mode of that pose. LE: ligand efficiency.</p></div>`;
       }
       const t = S.q.trim().toLowerCase();
@@ -363,7 +363,7 @@
       + `title="mode ${i + 1}: ${fmt(x[0])} kcal/mol${x[0] >= 0 ? ' (no favourable pose)' : ''}"><i style="height:${hi === lo ? 100 : 30 + 70 * (hi - x[0]) / (hi - lo)}%"></i></button>`).join('')}</div>` : '';
     const modeText = S.view === 'best' ? `mode ${S.mode} · highest affinity` : `mode ${S.mode}/${modes.length}`;
     const note = S.view === 'modes' && m ? `${fmt(m[0])} kcal/mol${m[0] >= 0 ? ' (no favourable pose)' : ''} · RMSD to mode 1: ${fmt(m[1], 2)}–${fmt(m[2], 2)} Å`
-      : `pocket ${r.pocket} · the pair's best pose`;
+      : `pocket ${r.pocket} · the pair's highest-affinity pose`;
     // an Atlas page (P.info) in the site's words: "drugs on", "compound", and a line when the protein is outside the drug's best targets
     const across = r.across ? `<dt>Across proteins</dt><dd>${esc(protName(P))} is ${r.across[0] == null ? `not among the top ${int(r.across[2])} of ${int(r.across[1])}`
       : `#${r.across[0]} of ${P.info ? int(r.across[1]) : r.across[1]}`} docked proteins for this ${P.info ? 'compound' : 'ligand'}</dd>` : '';
@@ -377,7 +377,7 @@
       + `<div class="pv-modes" data-pair-modes><button type="button" class="btn" data-act="step" data-v="-1" aria-label="Previous mode"${S.mode <= 1 ? ' disabled' : ''}>${ICON.left}</button>`
       + `<span class="pv-mode">${modeText}</span><button type="button" class="btn" data-act="step" data-v="1" aria-label="Next mode"${S.view === 'modes' && S.mode >= modes.length ? ' disabled' : ''}>${ICON.right}</button>`
       + `<span class="small mut">${note}</span></div>${bars}`
-      + `<div class="pv-row"><button type="button" class="tag" data-act="best" aria-pressed="${S.view === 'best'}" title="The pair's best pose">Highest-affinity pose</button>`
+      + `<div class="pv-row"><button type="button" class="tag" data-act="best" aria-pressed="${S.view === 'best'}" title="The pair's highest-affinity pose">Highest-affinity pose</button>`
       + `<label><input type="checkbox" data-act="allmodes"${S.allModes && S.view === 'modes' ? ' checked' : ''}${cur ? '' : ' disabled'}>Show all modes</label></div>`
       + contactsList() + `</div>`;
   }
@@ -419,7 +419,7 @@
       + item('save-protein', 'Protein (PDB)', `PV_${P.name}.pdb`, 'the structure the ligands were docked into')
       + item('save-residues', 'Pocket residues (CSV)', `PV_${P.name}_pockets.csv`, 'every P2Rank pocket: rank, score, centre, residues')
       + `<button type="button" class="link" data-act="image"${S.drawn && !S.imageBusy ? '' : ' disabled'}>Image of the view (PNG)</button><span class="pv-file mono">${esc(imageName())}</span>`
-      + `</div><p class="small mut">In Python: <span class="mono">pair.export()</span> and <span class="mono">pair.export_protein()</span>.</p></div>`;
+      + `</div><p class="small mut">In Python: <span class="mono">pair.export()</span> and <span class="mono">pair.export(protein=True)</span>.</p></div>`;
   }
   function pocketsCsv(P) {
     const q = v => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
@@ -473,9 +473,9 @@
     }).join('');
     return `<div role="tabpanel" aria-label="Pockets"><div class="scroll-x"><table class="dt"><thead><tr><th>Pocket</th><th class="r">Score</th><th class="r">Prob.</th>`
       + `<th class="r">Residues</th>` + (plddt ? `<th class="r" title="AlphaFold confidence of the pocket residues (mean pLDDT, 0–100)">pLDDT</th>` : '')
-      + `<th>Docked</th><th class="r" title="Ligands listed in Top hits whose highest-affinity pose is in this pocket">Best poses</th></tr></thead><tbody>${rows}</tbody></table></div>`
+      + `<th>Docked</th><th class="r wrap" title="Ligands listed in Top hits whose highest-affinity pose is in this pocket">Highest-affinity poses</th></tr></thead><tbody>${rows}</tbody></table></div>`
       + `<p class="pv-note">P2Rank pockets of ${esc(protName(P))}; ${P.docked.length} of them were docked. Score and Prob.: P2Rank.${plddt ? ' pLDDT: AlphaFold confidence of the pocket residues.' : ''}`
-      + ` Best poses: ligands listed in Top hits whose highest-affinity pose`
+      + ` Highest-affinity poses: ligands listed in Top hits whose highest-affinity pose`
       + ` is in that pocket. Click a pocket to show it in 3D and list its residues; a residue to look at it.</p></div>`;
   }
   function update(force) {
