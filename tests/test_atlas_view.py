@@ -122,7 +122,7 @@ def test_select_errors(atlas, monkeypatch):
     with pytest.raises(KeyError, match="no drug"):
         atlas.select(ABL1, "nosuchdrug")
     # a row whose pose file record has no output in any pocket
-    monkeypatch.setattr("pocketvina.atlas.pair_blocks", lambda source, ref, idx: [None] * 5)
+    monkeypatch.setattr("pocketvina.atlas.pose_records", lambda source, records, map=map: [([None] * 5, None)])
     with pytest.raises(ValueError, match=f"ligand '{PAIR[1]}' has no docked pose in protein '{ABL1}'"):
         atlas.select(*PAIR)
 
@@ -130,10 +130,19 @@ def test_select_errors(atlas, monkeypatch):
 def test_select_summary(atlas):
     sel = atlas.select(*PAIR, pocket="all", mode="all")
     first = repr(sel).splitlines()[0]
-    assert first.startswith(f"Selection {pose_name(*PAIR)}: protein {ABL1}, ligand {PAIR[1]}, every docked pocket")
+    assert first.startswith(f"Selection {pose_name(*PAIR)}: protein {ABL1}, ligand {PAIR[1]}, every mode in each "
+                            "pocket")
     assert sel.smiles in repr(sel)
     page = sel._repr_html_()
     assert pose_name(*PAIR) in page and "pair.show(), pair.bust(), pair.export()" in page
+    # the website's wording: "highest-affinity", never "best" before pose, mode, Vina, ... in what a reader sees
+    for pocket in (None, sel.best_pocket, "all"):
+        for mode in (1, 2, "all"):
+            shown = atlas.select(*PAIR, pocket=pocket, mode=mode)
+            for text in (repr(shown), shown._repr_html_()):
+                assert "lowest Vina score (kcal/mol)" in text
+                assert not re.search(r"best\W+(pose|mode|score|vina|pocket|drug)", text, re.IGNORECASE), text
+            assert "highest-affinity pose" in shown._repr_html_()
 
 
 # --- files ---------------------------------------------------------------------------------------------------------
@@ -170,6 +179,52 @@ def test_export_protein_is_the_alphafold_model(atlas, atlas_dir, tmp_path, monke
     af = atlas._protein_json(ABL1)["af_id"]
     model = gzip.decompress((atlas_dir / "structures" / f"{af}.pdb.gz").read_bytes()).decode()
     assert Path(path).read_text() == model and model.count("\nATOM") > 100
+
+
+def test_export_with_the_protein(atlas, atlas_dir, tmp_path, monkeypatch):
+    """export(protein=True) of an Atlas pair: the poses and the AlphaFold model, next to each other, as [poses,
+    protein]; export(ligand=False, protein=True): the model only, as export_protein() writes it."""
+    sel = atlas.select(*PAIR, pocket="all")
+    af = atlas._protein_json(ABL1)["af_id"]
+    model = gzip.decompress((atlas_dir / "structures" / f"{af}.pdb.gz").read_bytes()).decode()
+    poses = Path(sel.export(tmp_path / "expected.sdf")).read_bytes()
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    paths = sel.export(protein=True)
+    assert paths == [str(work / f"{pose_name(*PAIR)}_pocketall_top.sdf"), str(work / f"PV_{ABL1}.pdb")]
+    assert Path(paths[0]).read_bytes() == poses and Path(paths[1]).read_text() == model
+    sub = work / "sub"
+    sub.mkdir()
+    assert sel.export(sub, fmt="pdbqt", protein=True) == [str(sub / f"{pose_name(*PAIR)}_pocketall_top.pdbqt"),
+                                                          str(sub / f"PV_{ABL1}.pdb")]
+    path = sel.export(tmp_path / "only" / "protein.pdb", ligand=False, protein=True)
+    assert path == str(tmp_path / "only" / "protein.pdb") and os.listdir(tmp_path / "only") == ["protein.pdb"]
+    assert Path(path).read_text() == model
+
+
+def test_export_paths(atlas, tmp_path, monkeypatch):
+    """As for a pair of results: a path without an extension is a folder, made if needed; a file whose extension is
+    not its format's (.sdf or .pdbqt for the poses, .pdb for the protein) is an error before anything is written or
+    the AlphaFold model read."""
+    sel = atlas.select(*PAIR)
+    monkeypatch.chdir(tmp_path)
+    poses = f"{pose_name(*PAIR)}_top"
+    assert sel.export("poses", protein=True) == [str(tmp_path / "poses" / f"{poses}.sdf"),
+                                                 str(tmp_path / "poses" / f"PV_{ABL1}.pdb")]
+    assert sel.export("modes", fmt="pdbqt") == str(tmp_path / "modes" / f"{poses}.pdbqt")
+    assert sel.export_protein("protein") == str(tmp_path / "protein" / f"PV_{ABL1}.pdb")
+    written = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*"))
+    assert written == ["modes", f"modes/{poses}.pdbqt", "poses", f"poses/PV_{ABL1}.pdb", f"poses/{poses}.sdf",
+                       "protein", f"protein/PV_{ABL1}.pdb"]
+    monkeypatch.setattr(sel._source, "protein_pdb", lambda protein: pytest.fail("the protein was read"))
+    with pytest.raises(ValueError, match=re.escape(f"{tmp_path / 'abl1.pdb'}: poses are written as SDF; use a .sdf "
+                                                   "name, or fmt='pdbqt' for .pdbqt")):
+        sel.export("abl1.pdb", protein=True)
+    with pytest.raises(ValueError, match=re.escape(f"{tmp_path / 'x.sdf'}: the protein is written as PDB; use a .pdb "
+                                                   "name")):
+        sel.export_protein("x.sdf")
+    assert sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*")) == written
 
 
 def test_bust_one_pose(atlas):
@@ -247,7 +302,7 @@ def test_show_lists_max_ligands(atlas, tmp_path):
     rows, drugs, hits = top_hits(atlas, ABL1)
     two = payload(atlas.show(ABL1, path=tmp_path / "a.html", max_ligands=2))["proteins"][0]
     assert [r["lig"] for r in two["rows"]] == [r["cidx"] for r in hits[:2]]
-    assert two["topNote"] == f"{TOP_HITS} The best 2 of {len(hits)} on ABL1 (max_ligands=2)."
+    assert two["topNote"] == f"{TOP_HITS} The top 2 of {len(hits)} on ABL1 (max_ligands=2)."
     every = payload(atlas.show(ABL1, path=tmp_path / "b.html", max_ligands=None))
     assert [r["lig"] for r in every["proteins"][0]["rows"]] == [r["cidx"] for r in hits]
     assert every["maxLigands"] is None and every["proteins"][0]["topNote"] == TOP_HITS
@@ -331,16 +386,22 @@ def test_show_in_a_notebook(atlas, tmp_path, monkeypatch):
     tag = shown[1]._repr_html_()
     assert "allow-popups allow-popups-to-escape-sandbox" in tag
     page = html.unescape(re.match(r'<iframe srcdoc="([^"]*)"', tag).group(1))
-    assert 'data-theme-setting="dark"' in page and workspace.page_payload(page)["initial"]["tab"] == "pair"
+    assert '<html lang="en" data-theme="dark" data-theme-setting="dark">' in page  # dark from the first paint
+    assert workspace.page_payload(page)["initial"]["tab"] == "pair"
 
 
 def test_show_over_http(atlas, atlas_server, tmp_path, monkeypatch):
-    """The page read over HTTP (Range requests for the poses) is the page read from the folder."""
+    """The page read over HTTP (Range requests for the poses) is the page read from the folder. Ranges close together
+    come in one request; a second page asks for nothing (the ranges are kept in memory, the files in the cache)."""
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     remote = Atlas(atlas_server.url)
     over_http = payload(remote.show(ABL1, path=tmp_path / "a.html"))
     assert over_http == payload(atlas.show(ABL1, path=tmp_path / "b.html"))
-    assert sum(1 for _, header in atlas_server.requests if header) >= 3 * len(over_http["proteins"][0]["rows"])
+    ranges = sum(1 for _, header in atlas_server.requests if header)
+    assert 0 < ranges < 3 * len(over_http["proteins"][0]["rows"])  # one each before: table B, blocks, top pose
+    asked = len(atlas_server.requests)
+    assert payload(remote.show(ABL1, path=tmp_path / "a2.html")) == over_http
+    assert len(atlas_server.requests) == asked
     sel = remote.select(*REDOCK)
     assert payload(sel.show(path=tmp_path / "c.html"))["initial"]["ligand"] == sel.ligand_idx
 

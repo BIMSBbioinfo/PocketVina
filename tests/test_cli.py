@@ -189,7 +189,7 @@ def test_dock_atlas(tmp_path, example_dir, fake_engine_env, stubs):
                        "--ligands-per-call", 1, "--engine-timeout", 60, "--tmp-dir", tmp))
     assert f"results: {out}" in result.stdout
     assert "proteins: 1 docked, 0 done before, 0 failed (of 1)" in result.stdout
-    assert "best poses: 2" in result.stdout
+    assert "highest-affinity poses: 2" in result.stdout
     params = manifest_params(out)
     assert {k: params[k] for k in ("output_format", "seed", "box_size", "thread", "num_modes", "energy_range",
                                    "top_pockets", "ligands_per_call", "pocket_source")} == dict(
@@ -502,7 +502,7 @@ def test_dock_nothing_docked_when_the_engine_writes_no_pose(tmp_path, example_di
     plist, smiles = inputs(tmp_path, example_dir, ligands=LIGANDS[:1])
     result = invoke("dock", "--proteins", plist, "--ligands", smiles, "--out", tmp_path / "r", "--top-pockets", 1,
                     "--tmp-dir", tmp_path / "tmp")
-    assert result.exit_code == cli.EXIT_NOTHING and "best poses: 0" in result.stdout
+    assert result.exit_code == cli.EXIT_NOTHING and "highest-affinity poses: 0" in result.stdout
 
 
 def test_dock_files_format(tmp_path, example_dir, fake_engine_env, stubs):
@@ -638,7 +638,7 @@ def test_info(tmp_path, imported):
     result = ok(invoke("info", "--results", imported))
     text = result.stdout
     for needle in (f"results: {imported}", "format: pocketvina-atlas 1", "params:", "ligands: 3 (", "proteins: 1 done",
-                   "best poses: 2 of 3"):
+                   "highest-affinity poses: 2 of 3"):
         assert needle in text, needle
     data = json.loads(ok(invoke("info", "--results", imported, "--json")).stdout)
     assert data["proteins"] == 1 and data["ligands"]["total"] == 3 and data["pairs"] == dict(total=3, with_pose=2)

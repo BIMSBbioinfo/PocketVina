@@ -44,7 +44,8 @@ logger = logging.getLogger(__name__)
 
 VIEWER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "viewer")
 MOLSTAR_DIR = os.path.join(VIEWER_DIR, "molstar-pv-5.13.1")
-# the PocketVina Atlas website; molstar="url" loads its copy of the Mol* bundle (the same file as MOLSTAR_DIR's)
+# where the PocketVina Atlas keeps its files (the website itself is at https://pocketvina-atlas.mdc-berlin.de/);
+# molstar="url" loads its copy of the Mol* bundle from here (the same file as MOLSTAR_DIR's)
 ATLAS_URL = "https://bimsbstatic.mdc-berlin.de/akalin/asarigun/pocketvina_atlas/"
 MOLSTAR_URL = ATLAS_URL + "vendor/molstar-pv-5.13.1/molstar-pv.js"
 MOLSTAR_SOURCES = ("inline", "url")
@@ -84,11 +85,12 @@ def _raw_text(text: str, what: str) -> str:
     return text
 
 
-def _pack(obj) -> str:
-    """JSON, gzip-compressed (no timestamp: the same data gives the same page), base64. Bytes of the stored files that
-    are not UTF-8 (read with surrogateescape, Results.pose_block) become "?"."""
+def _pack(obj, level: int = 6) -> str:
+    """JSON, gzip-compressed at ``level`` (no timestamp: the same data gives the same page), base64. Bytes of the
+    stored files that are not UTF-8 (read with surrogateescape, Results.pose_block) become "?". Level 6: a page of
+    many poses (10 MB of JSON) packs in a quarter of the time of level 9, about 7% larger."""
     data = json.dumps(obj, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8", "replace")
-    return base64.b64encode(gzip.compress(data, compresslevel=9, mtime=0)).decode("ascii")
+    return base64.b64encode(gzip.compress(data, compresslevel=level, mtime=0)).decode("ascii")
 
 
 def unpack(text: str):
@@ -110,7 +112,7 @@ def _assets(molstar: str) -> str:
         assets["molstarJs"] = _raw_text(_read("molstar-pv-5.13.1", "molstar-pv.js"), "molstar-pv.js")
     else:
         assets["molstarUrl"] = MOLSTAR_URL
-    return _pack(assets)
+    return _pack(assets, level=9)  # once per process: the smallest page
 
 
 # --- data ----------------------------------------------------------------------------------------------------------
@@ -123,8 +125,10 @@ def _num(x, digits: Optional[int] = None):
     return round(x, digits) if digits is not None else x
 
 
+@functools.lru_cache(maxsize=512)
 def ligand_svg(smiles: Optional[str]) -> Optional[str]:
-    """2D drawing of a molecule as SVG text (RDKit), or None if the SMILES does not parse."""
+    """2D drawing of a molecule as SVG text (RDKit), or None if the SMILES does not parse. Kept per SMILES (a page
+    shown again draws nothing)."""
     from rdkit import Chem, rdBase
     from rdkit.Chem.Draw import rdMolDraw2D
 
@@ -354,9 +358,12 @@ def workspace_html(data: dict, *, molstar: str = "inline", theme: str = "auto", 
         raise ValueError(f"theme must be one of {THEMES}, got {theme!r}")
     css = _raw_text(_read("workspace.css"), "workspace.css")
     js = _raw_text(_read("workspace.js"), "workspace.js")
+    # the theme of the first paint, before the page's script runs: the one asked for; "auto" is light until the
+    # script reads the system's (data-theme-setting)
+    first = "dark" if theme == "dark" else "light"
     return (
         "<!DOCTYPE html>\n"
-        f'<html lang="en" data-theme="light" data-theme-setting="{theme}">\n<head>\n<meta charset="utf-8">\n'
+        f'<html lang="en" data-theme="{first}" data-theme-setting="{theme}">\n<head>\n<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         '<meta name="color-scheme" content="light dark">\n'
         f"<title>{html.escape(title)}</title>\n<style>\n{css}</style>\n</head>\n<body>\n"
@@ -476,7 +483,7 @@ def show(res: Results, protein=None, *, selection: Optional[Selection] = None, p
     data = workspace_data(res, pids, max_ligands=max_ligands, selection=selection)
     for p in data["proteins"]:
         if max_ligands is not None and p["n"] > max_ligands:
-            logger.info("%s: the page lists the best %d of %d ligands (max_ligands=%d)", p["id"], max_ligands, p["n"],
+            logger.info("%s: the page lists the top %d of %d ligands (max_ligands=%d)", p["id"], max_ligands, p["n"],
                         max_ligands)
     if selection is not None:
         name, title = selection.name, f"PocketVina: {selection.protein} x {selection.ligand}"

@@ -1,7 +1,7 @@
 """PoseBusters checks of the docked poses in a results directory: ``bust_results``, ``check_names``.
 
-Per protein, the poses to check are picked from the results (``select``): the stored best pose of every ligand
-(section A SDF), or the best modes overall or per pocket, converted from the engine output with
+Per protein, the poses to check are picked from the results (``select``): the stored highest-affinity pose of every
+ligand (section A SDF), or the highest-affinity modes overall or per pocket, converted from the engine output with
 ``pocketvina.convert``. The protein structure (``structures/<protein_id>.*.gz``) is decompressed in memory; PDBQT and
 mmCIF structures are converted to PDB text first, since PoseBusters reads only PDB proteins, and crystal waters
 (``HOH``) are left out as for docking (other HETATM records, e.g. metal ions and cofactors, stay). Worker processes
@@ -574,7 +574,7 @@ def _select_poses(res: Results, pid: str, select: str, top_k: int, smiles: Dict[
                 poses.append(_Pose(i, lig, -1, -1, "no_pose", "the ligand has no docked pose", None))
             elif sdf_status != "ok" or not top_length:
                 poses.append(_Pose(i, lig, k, mode, "convert_failed",
-                                   f"no SDF of the best pose (sdf_status {sdf_status})", None))
+                                   f"no SDF of the highest-affinity pose (sdf_status {sdf_status})", None))
             else:
                 poses.append(_Pose(i, lig, k, mode, None, None, ("top",)))
         return poses
@@ -826,9 +826,10 @@ def bust_results(results_dir, *, select: str = "best", top_k: int = 1, config="d
                  tmp_dir: Optional[str] = None) -> List[str]:
     """Run PoseBusters on the docked poses of a results directory; returns the ids of the proteins checked.
 
-    ``select``: "best" the stored best pose of each ligand; "top_k" the ``top_k`` best modes of each ligand over all
-    pockets; "per_pocket" the ``top_k`` best modes of each ligand in each pocket. Modes other than the stored best
-    pose are converted from the engine output with ``pocketvina.convert`` (a failure is a "convert_failed" row).
+    ``select``: "best" the stored highest-affinity pose of each ligand; "top_k" the ``top_k`` highest-affinity modes
+    of each ligand over all pockets; "per_pocket" the ``top_k`` highest-affinity modes of each ligand in each pocket.
+    Modes other than the stored highest-affinity pose are converted from the engine output with ``pocketvina.convert``
+    (a failure is a "convert_failed" row).
     ``config``: a PoseBusters config name ("dock", "dock_fast", ...) or dict. ``workers``: worker processes (None:
     ``default_workers()``). ``timeouts``: seconds per pose for each attempt; a pose still running after the last one
     is a "timeout" row (None: no limit). ``proteins``: protein ids (None: every committed protein).

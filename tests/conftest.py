@@ -264,17 +264,36 @@ class _FileHandler(BaseHTTPRequestHandler):
     """Serves the server's folder: whole files, and one byte range when the request has a Range header and the
     server answers ranges (``server.ranges = False`` makes it send the whole file instead, status 200); a range that
     starts past the end of the file gets status 416. ``server.cut = n``: the next n answers stop halfway and the
-    connection closes."""
+    connection closes. ``server.hang_up = n``: the next n answers are whole, then the connection closes without
+    saying so (as a server does with a connection kept open too long). ``server.fail = n``: the next n requests get
+    status 503. A path under "moved/" is redirected (301) to
+    the same path without it. Connections are kept open between requests (HTTP/1.1)."""
 
     protocol_version = "HTTP/1.1"
 
     def log_message(self, *args):  # no request log in the test output
         pass
 
+    def setup(self):
+        super().setup()
+        self.server.connections += 1
+        self.server.open.append(self.connection)
+
     def do_GET(self):
         rel = urllib.parse.unquote(urllib.parse.urlparse(self.path).path).lstrip("/")
+        if rel.startswith("moved/"):
+            self.server.requests.append((rel, self.headers.get("Range")))
+            self.send_response(301)
+            self.send_header("Location", "/" + rel[len("moved/"):])
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         path = Path(self.server.root, *rel.split("/"))
         self.server.requests.append((rel, self.headers.get("Range")))
+        if self.server.fail:
+            self.server.fail -= 1
+            self.send_error(503, "busy")
+            return
         if not path.is_file() or ".." in rel.split("/"):
             self.send_error(404, "no such file")
             return
@@ -298,13 +317,18 @@ class _FileHandler(BaseHTTPRequestHandler):
             self.server.cut -= 1
             body = body[:len(body) // 2]
             self.close_connection = True
+        elif self.server.hang_up:
+            self.server.hang_up -= 1
+            self.close_connection = True
         self.wfile.write(body)
 
 
 class FixtureServer(ThreadingHTTPServer):
     """A local HTTP server for a folder: ``url`` (its base URL, ending in "/"), ``requests`` (one
-    ``(path, Range header)`` per request), ``ranges`` (set it to False to answer Range requests with the whole
-    file, as some servers do) and ``cut`` (set it to n to drop the connection halfway through the next n answers)."""
+    ``(path, Range header)`` per request), ``connections`` (connections opened to it), ``ranges`` (set it to False
+    to answer Range requests with the whole file, as some servers do), ``cut`` (set it to n to drop the connection
+    halfway through the next n answers), ``hang_up`` (set it to n to close the connection after each of the next
+    n answers) and ``fail`` (set it to n to answer the next n requests with status 503)."""
 
     daemon_threads = True
 
@@ -314,10 +338,20 @@ class FixtureServer(ThreadingHTTPServer):
         self.requests = []
         self.ranges = True
         self.cut = 0
+        self.hang_up = 0
+        self.fail = 0
+        self.connections = 0
+        self.open = []  # the connections' sockets, closed when the test ends (see http_server)
 
     @property
     def url(self) -> str:
         return f"http://127.0.0.1:{self.server_address[1]}/"
+
+    def handle_error(self, request, client_address):
+        # a client that closes its connection before reading the whole answer (e.g. a file sent whole for a byte
+        # range) is not an error of the test
+        if not isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError)):
+            super().handle_error(request, client_address)
 
 
 @pytest.fixture
@@ -336,6 +370,11 @@ def http_server():
     for server in servers:
         server.shutdown()
         server.server_close()
+        for conn in server.open:  # connections kept open: their threads would go on answering
+            try:
+                conn.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
 
 
 @pytest.fixture(scope="session")

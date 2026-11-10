@@ -6,14 +6,34 @@ PoseBusters is installed with PocketVina. Docking does not run it unless you ask
 
 ## One pair
 
-`bust()` checks the poses you picked with `select()`:
+`bust()` checks the poses you picked with `select()`. Pick the highest-affinity pose of a protein and ligand:
 
 ```python
-pair = pocketvina.select(protein="1fbl", ligand="molecule1")              # the best pose
+pair = pocketvina.select(protein="1fbl", ligand="molecule1")
+```
+
+Check it:
+
+```python
 pair.bust()
-pair = pocketvina.select(protein="1fbl", ligand="molecule1", mode="all")  # every mode of the best pocket
-checks = pair.bust(workers=4)                                             # 4 processes at a time
-checks[checks.pb_valid]                                                   # the modes that pass every check
+```
+
+To check all modes of the pocket of the highest-affinity pose, pick them with `mode="all"`:
+
+```python
+pair = pocketvina.select(protein="1fbl", ligand="molecule1", mode="all")
+```
+
+Check them, with 4 processes at a time:
+
+```python
+checks = pair.bust(workers=4)
+```
+
+The modes that pass every check:
+
+```python
+checks[checks.pb_valid]
 ```
 
 `bust()` returns a table with one row per selected pose. Nothing is written to disk. The main columns:
@@ -25,11 +45,24 @@ checks[checks.pb_valid]                                                   # the 
 
 ## A whole run
 
-`pocketvina bust` checks the poses of a whole results folder:
+`pocketvina bust` checks the poses of a whole results folder. Without `--select`, it checks the highest-affinity
+pose of every ligand:
 
 ```bash
-pocketvina bust --results results                                        # the best pose of every ligand
-pocketvina bust --results results --select top_k --top-k 3 --overwrite   # the 3 best modes of every ligand
+pocketvina bust --results results
+```
+
+With `--select top_k --top-k 3`, it checks the 3 highest-affinity modes of every ligand. `--overwrite` checks the
+proteins again:
+
+```bash
+pocketvina bust --results results --select top_k --top-k 3 --overwrite
+```
+
+With `--select per_pocket --top-k 1 --protein 1fbl`, it checks the highest-affinity mode of every ligand in each
+pocket, only in protein 1fbl:
+
+```bash
 pocketvina bust --results results --select per_pocket --top-k 1 --protein 1fbl --overwrite
 ```
 
@@ -38,9 +71,9 @@ skipped, so you can run `bust` again after docking more proteins.
 
 | Option | Meaning | Default |
 | --- | --- | --- |
-| `--select best` | the best pose of each ligand | `best` |
-| `--select top_k --top-k K` | the K best modes of each ligand, over all pockets | |
-| `--select per_pocket --top-k K` | the K best modes of each ligand in each pocket | |
+| `--select best` | the highest-affinity pose of each ligand | `best` |
+| `--select top_k --top-k K` | the K highest-affinity modes of each ligand, over all pockets | |
+| `--select per_pocket --top-k K` | the K highest-affinity modes of each ligand in each pocket | |
 | `--config dock` | PoseBusters configuration: `dock`, `dock_fast`, ... | `dock` |
 | `--workers N` | worker processes | the CPUs, at most 16 |
 | `--timeouts 30,300` | seconds per pose for each try. A pose that takes longer is tried once more, then saved as `timeout` | `30,300` |
@@ -54,18 +87,24 @@ then check each protein while the GPU docks the next one:
 pocketvina dock --proteins example/proteins --ligands example/ligands.txt --out results --posebusters
 ```
 
-In Python, check a whole run and read the results back:
+In Python, `bust_results` checks a whole run. It returns the protein ids checked:
 
 ```python
 from pocketvina import bust
-from pocketvina.io.results import Results
 
-bust.bust_results("results", select="best", workers=4)        # returns the protein ids checked
-pb = Results("results").posebusters("1fbl")
-pb[["ligand_id", "pocket", "mode", "pb_status", "failed_checks"]]
+bust.bust_results("results", select="best", workers=4)
 ```
 
 Outside Linux, put this code under `if __name__ == "__main__":` in a script.
+
+`posebusters` reads the saved checks of one protein, here with a few of their columns:
+
+```python
+from pocketvina.io.results import Results
+
+pb = Results("results").posebusters("1fbl")
+pb[["ligand_id", "pocket", "mode", "pb_status", "failed_checks"]]
+```
 
 ## Saved results
 
@@ -81,9 +120,14 @@ Outside Linux, put this code under `if __name__ == "__main__":` in a script.
 The columns `pb_mask` and `pb_na_mask` store each check as one bit: passed, or no result.
 `Results("results").posebusters_checks("1fbl")` returns the check names in bit order.
 
-You can query the checks with DuckDB:
+You can query the checks with DuckDB. The number of poses with each status:
 
 ```bash
 pocketvina query --results results "SELECT pb_status, count(*) AS n FROM posebusters GROUP BY pb_status"
+```
+
+The poses that failed a check, with the names of the checks they failed (at most 20):
+
+```bash
 pocketvina query --results results "SELECT protein_id, ligand_id, pocket, mode, failed_checks FROM posebusters WHERE NOT pb_valid LIMIT 20"
 ```

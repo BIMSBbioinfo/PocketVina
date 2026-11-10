@@ -45,8 +45,8 @@ different 3D starting structures, so a pip and a conda environment can give diff
 
 ### Which pocket was a ligand docked into?
 
-The column `best_pocket` of `best_scores()` is the P2Rank rank of the pocket of the best pose. The `pockets` table
-has its centre, box size and residues ([Results format](output-format.md)).
+The column `best_pocket` of `best_scores()` is the P2Rank rank of the pocket of the highest-affinity pose. The
+`pockets` table has its centre, box size and residues ([Results format](output-format.md)).
 
 ### Do I need to clear a cache after an update?
 

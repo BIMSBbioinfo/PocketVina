@@ -5,11 +5,11 @@
     atlas.search("imatinib")                       # proteins and drugs that match, best first
     atlas.protein("ABL1")                          # protein information (in a notebook: a small card)
     atlas.drug("imatinib")                         # drug identifiers
-    atlas.best_scores(protein="ABL1", top=20)      # drugs on a protein, best first
-    atlas.best_scores(ligand="imatinib", top=20)   # proteins of a drug, best first
+    atlas.best_scores(protein="ABL1", top=20)      # drugs on a protein, highest-affinity first
+    atlas.best_scores(ligand="imatinib", top=20)   # proteins of a drug, highest-affinity first
     pair = atlas.select(protein="ABL1", ligand="imatinib")   # a Selection, as Results.select gives
-    pair.show(); pair.bust(); pair.export(); pair.export_protein()
-    atlas.show(protein="ABL1")                     # the protein's page: its best drugs, in 3D
+    pair.show(); pair.bust(); pair.export(); pair.export(protein=True)
+    atlas.show(protein="ABL1")                     # the protein's page: its highest-affinity drugs, in 3D
     atlas.download(proteins=["ABL1", "EGFR"], out="my_atlas")   # a subset that Atlas("my_atlas") reads offline
 
 ``protein=`` and ``ligand=`` take any identifier the Atlas has. A protein: its UniProt accession ("P00519"), entry
@@ -37,7 +37,7 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 import pandas as pd
 
 from . import __version__, pdbqt
-from .io.atlas_source import Source, pair_blocks, top_record
+from .io.atlas_source import Source, pose_records, top_record
 from .selection import Selection, _check_mode, _check_pocket, _pick_poses, _short, name_part
 
 logger = logging.getLogger(__name__)
@@ -47,8 +47,9 @@ ATLAS_URL = "https://bimsbstatic.mdc-berlin.de/akalin/asarigun/pocketvina_atlas/
 RELEASES = ("v1.1",)  # the releases this version of PocketVina reads
 BEST_SCORES_COLUMNS = ("protein_id", "gene", "ligand_id", "name", "vina", "best_pocket", "best_mode",
                        "ligand_efficiency")
-MAX_LIGANDS = 25  # drugs listed in Top hits of a page (best first); the poses of each are fetched
-THREADS = 8  # drugs fetched at the same time for a page
+MAX_LIGANDS = 25  # drugs listed in Top hits of a page (highest-affinity first); the poses of each are fetched
+THREADS = 8  # files copied at the same time by download
+PAGE_THREADS = 16  # requests sent at the same time for a page (Atlas.show)
 NON_DRUG = 8  # bit of a row's flags: docked as a salt counterion, solvent or fragment (meta.json "flags"), not a drug
 # Top hits of a page, in the Atlas site's words (components/ProteinWorkspace.tsx)
 TOP_HITS = ("Highest Vina affinities among PoseBusters-valid poses (non-drug structures and poses not yet checked "
@@ -59,18 +60,19 @@ OPEN_TARGETS_URL = "https://platform.opentargets.org/target/{}/associations"
 OPEN_TARGETS_EVIDENCE_URL = "https://platform.opentargets.org/evidence/{}/{}"
 CHEMBL_URL = "https://www.ebi.ac.uk/chembl/explore/compound/{}"
 # what a download (atlas.download) holds besides the files of its proteins: every drug page, the search files, these
-# tables (the drug identifiers and the HGNC IDs) and these files of the release's folder
+# tables (the drug identifiers and the HGNC IDs) and these files of the release's folder (LICENSE, the data's licence:
+# if the release has one; its MANIFEST.json does not list it)
 SUBSET_TABLES = ("compound_entries", "compound_entries_annotated", "compounds", "proteins")
-SUBSET_FILES = ("ligand_ids.json",)
+SUBSET_FILES = ("ligand_ids.json", "LICENSE")
 SUBSET_NOTE = ("A part of the PocketVina Atlas, written by pocketvina's Atlas.download(): for these proteins their "
                "files of proteins/, salt_forms/, poses/, poses_redock/ and structures/, and from the release every "
                "drug page (compounds/<PVL>.json.gz), the search files (search/), the tables compound_entries, "
-               "compound_entries_annotated, compounds and proteins (tables/) and ligand_ids.json, all as released "
-               "(byte-identical copies, checked against the release's MANIFEST.json). Not copied: "
-               "compounds/<PVL>.all.json.gz (every protein of a drug): best_scores(ligand=...) lists the proteins of "
-               "this subset only, from their proteins/<UniProt>.json rows, and search() lists them and every drug. "
-               "The identifiers of every protein and drug of the release are known (a protein outside the subset: "
-               "an error that says so).")
+               "compound_entries_annotated, compounds and proteins (tables/), ligand_ids.json and LICENSE (the "
+               "data's licence, if the release has one), all as released (byte-identical copies, checked against "
+               "the release's MANIFEST.json). Not copied: compounds/<PVL>.all.json.gz (every protein of a drug): "
+               "best_scores(ligand=...) lists the proteins of this subset only, from their proteins/<UniProt>.json "
+               "rows, and search() lists them and every drug. The identifiers of every protein and drug of the "
+               "release are known (a protein outside the subset: an error that says so).")
 _SUBSET_FOLDERS = ("proteins", "salt_forms", "poses", "poses_redock", "structures", "compounds", "search", "tables")
 _SHOWN = 10  # candidates listed in an "ambiguous identifier" error
 # identifiers that go into a link of a page (the site's checks, lib/keys.ts RX and app/protein/[id]/page.tsx)
@@ -865,12 +867,12 @@ class Atlas:
     # --- scores ----------------------------------------------------------------------------------------------------
 
     def best_scores(self, protein=None, ligand=None, top: Optional[int] = None) -> pd.DataFrame:
-        """Best (lowest) Vina score of each pair of a protein or of a drug, best first: one row per pair with
+        """Lowest Vina score of each pair of a protein or of a drug, highest-affinity first: one row per pair with
         protein_id (UniProt), gene, ligand_id (PVL), name (the drug), vina (kcal/mol), best_pocket, best_mode and
         ligand_efficiency (-vina / heavy atoms). No PoseBusters columns (as in a results directory).
 
-            atlas.best_scores(protein="ABL1", top=20)     # the 20 drugs that score best on this protein
-            atlas.best_scores(ligand="imatinib", top=20)  # the 20 proteins this drug scores best on
+            atlas.best_scores(protein="ABL1", top=20)     # the 20 highest-affinity drugs on this protein
+            atlas.best_scores(ligand="imatinib", top=20)  # the 20 proteins with this drug's lowest Vina scores
 
         protein: any identifier of a protein; the drugs docked into it.
         ligand: any identifier of a drug; the proteins it was docked into (in a download: its proteins). Give exactly
@@ -941,8 +943,7 @@ class Atlas:
         """The stored poses of one pair: (the best pose as SDF text, or None if the release has none; the engine
         output (every mode) per pocket as PDBQT text, only pockets that have one)."""
         pair = self._pair(protein, ligand)
-        top = top_record(self.source, pair.ref["file"], int(pair.row["top_off"]), int(pair.row["top_len"]))
-        blocks = pair_blocks(self.source, pair.ref, pair.index)
+        blocks, top = self._poses([(pair.ref, pair.index, pair.row)])[0]
         return (_text(top) if top else None,
                 {k: _text(block) for k, block in enumerate(blocks, 1) if block})
 
@@ -962,19 +963,21 @@ class Atlas:
 
     def select(self, protein, ligand, pocket=None, mode=1) -> Selection:
         """The poses of one protein x drug pair, to show, check or save: a ``Selection``, as ``Results.select`` gives
-        for docking results (the same pocket and mode choices, the same methods). By default the pair's best pose.
+        for docking results (the same pocket and mode choices, the same methods). By default the pair's
+        highest-affinity pose.
 
-            pair = atlas.select(protein="ABL1", ligand="imatinib")               # the best pose
-            pair = atlas.select(protein="ABL1", ligand="imatinib", pocket="all")  # the best pose in every pocket
+            pair = atlas.select(protein="ABL1", ligand="imatinib")               # the highest-affinity pose
+            pair = atlas.select(protein="ABL1", ligand="imatinib", pocket="all")  # that pose in each pocket
             pair = atlas.select(protein="ABL1", ligand="imatinib", pocket=2, mode="all")  # every mode of pocket 2
-            pair.show(); pair.bust(); pair.export(); pair.export_protein()
+            pair.show(); pair.bust(); pair.export(); pair.export(protein=True)
 
         protein: any identifier of the protein, e.g. "ABL1" or "P00519".
         ligand: any identifier of the drug, e.g. "imatinib", its PVL ID or a catalogue number (that entry's own run,
             if the release has one).
-        pocket: a pocket number (P2Rank rank), e.g. 2; None (default): the pocket of the pair's best pose; "all": every
-            pocket with poses.
-        mode: 1 (default): the best mode of the pocket; 2, 3, ...: that mode; "all": every mode of the pocket(s).
+        pocket: a pocket number (P2Rank rank), e.g. 2; None (default): the pocket of the pair's highest-affinity pose;
+            "all": every pocket that has poses.
+        mode: 1 (default): the highest-affinity mode of the pocket; 2, 3, ...: that mode; "all": every mode of the
+            pocket(s).
 
         The selection's ``protein`` is the UniProt accession and its ``ligand`` the PVL ID, so files are named like
         PV_P00519_PVL00129_top.sdf. Unknown proteins and drugs raise ``KeyError``; a pair without results, a pocket
@@ -983,8 +986,8 @@ class Atlas:
         pocket, mode = _check_pocket(pocket), _check_mode(mode)
         pair = self._pair(protein, ligand)
         uniprot, row = pair.protein["uniprot"], pair.row
-        blocks = {k: block for k, block in enumerate(pair_blocks(self.source, pair.ref, pair.index), 1)
-                  if block and pdbqt.parse_modes(block)}
+        all_blocks = pose_records(self.source, [(pair.ref, pair.index, 0, 0)])[0][0]  # the top pose: only if needed
+        blocks = {k: block for k, block in enumerate(all_blocks, 1) if block and pdbqt.parse_modes(block)}
         docked = sorted(blocks)
         best_pocket, best_mode = int(row["pocket"]), int(row["mode"])
         if best_pocket not in blocks:
@@ -1000,6 +1003,14 @@ class Atlas:
                          docked_pockets=docked, poses=poses, top_sdf=_text(top) if top else None,
                          source=_PairSource(self, pair))
 
+    def _poses(self, rows: List[Tuple[dict, int, dict]],
+               map=map) -> List[Tuple[List[Optional[bytes]], Optional[bytes]]]:
+        """(mode blocks per pocket, top pose) of rows of a protein's JSON, each given as (pose file ref, record index,
+        row), read together (``pose_records``); ``map``: how the requests of a round run (default: one after another,
+        on one kept connection)."""
+        return pose_records(self.source, [(ref, index, int(row["top_off"]), int(row["top_len"]))
+                                          for ref, index, row in rows], map)
+
     def _entry_smiles(self, cat: str, pvl: str) -> Tuple[Optional[str], Optional[str]]:
         """(library SMILES as screened, SMILES of the molecule docked) of a catalogue number; the drug page's docked
         SMILES if the release does not list the catalogue number."""
@@ -1012,7 +1023,7 @@ class Atlas:
     def show(self, protein, *, path=None, molstar: str = "inline", theme: str = "auto", height: int = 760,
              max_ligands: Optional[int] = MAX_LIGANDS):
         """The protein's page, as ``Results.show`` draws docking results: the 3D view (pocket chips, modes, legend,
-        contacts, Save image) beside the tabs Top hits (the drugs that score best on it with a PoseBusters-valid pose,
+        contacts, Save image) beside the tabs Top hits (its highest-affinity drugs with a PoseBusters-valid pose,
         as on the Atlas site; pick one there), Selected pair, Pockets and Download, with the protein's information,
         its associated diseases and each drug's identifiers. In Jupyter, Colab or VSCode it is shown below the cell;
         elsewhere an HTML file is written (open it in a browser), e.g. PV_P00519.html, and its path returned.
@@ -1027,8 +1038,8 @@ class Atlas:
             PocketVina Atlas website when the page opens (a much smaller page; needs internet).
         theme: "auto" (default: as the browser), "light" or "dark".
         height: height of the view in a notebook, in pixels, e.g. 900.
-        max_ligands: drugs listed in Top hits, best first, e.g. 50 (default 25: the poses of each are fetched);
-            None: all.
+        max_ligands: drugs listed in Top hits, highest-affinity first, e.g. 50 (default 25: the poses of each are
+            fetched); None: all.
         """
         return self._show(self._uniprot(protein), path=path, molstar=molstar, theme=theme, height=height,
                           max_ligands=max_ligands)
@@ -1061,8 +1072,8 @@ class Atlas:
         pose is PoseBusters-valid, best first; ``max_ligands`` of them), and ``pair``'s row if it is not among them,
         each with its poses in every pocket, its top pose (SDF), its stored PoseBusters result and its drug's
         identifiers. As on the site, ``rank`` and ``n`` count the protein's rows of drugs (a row docked as something
-        else than a drug, or a catalogue number's own run, has no rank). The rows' poses and drug pages are fetched at
-        the same time (``THREADS``)."""
+        else than a drug, or a catalogue number's own run, has no rank). The rows' poses (``pose_records``: two rounds
+        of reads), their drug pages and the structure are fetched at the same time (``PAGE_THREADS``)."""
         from .workspace import _initial, ligand_svg
 
         data = self._protein_json(uniprot)
@@ -1077,23 +1088,34 @@ class Atlas:
         title = _str(data.get("gene")) or uniprot
         top_note = TOP_HITS
         if max_ligands is not None and len(hits) > max_ligands:
-            top_note += f" The best {max_ligands} of {len(hits):,} on {title} (max_ligands={max_ligands})."
-            logger.info("%s: Top hits lists the best %d of %d drugs with a PoseBusters-valid pose (max_ligands=%d)",
+            top_note += f" The top {max_ligands} of {len(hits):,} on {title} (max_ligands={max_ligands})."
+            logger.info("%s: Top hits lists the top %d of %d drugs with a PoseBusters-valid pose (max_ligands=%d)",
                         uniprot, max_ligands, len(hits), max_ligands)
         self._drug_index()  # loaded once, before the threads use it
 
-        def fetch(row: dict):
-            ref, index = _pose_ref(data, row)
-            blocks = pair_blocks(self.source, ref, index)
-            top = top_record(self.source, ref["file"], int(row["top_off"]), int(row["top_len"]))
+        def drug(row: dict):
             page = self._compound_json(row["pvl"])
-            return blocks, top, self._drug_info(row["pvl"], row["cat"], page), _across(page, uniprot)
+            return self._drug_info(row["pvl"], row["cat"], page), _across(page, uniprot)
 
-        with ThreadPoolExecutor(max_workers=THREADS) as pool:
-            fetched = list(pool.map(fetch, listed))
+        with ThreadPoolExecutor(max_workers=PAGE_THREADS) as pool:
+            later: list = []  # the structure and the drug pages: asked for after the first round of pose reads
+
+            def ask_later():
+                if not later:
+                    later.append(pool.submit(self._structure, data))
+                    later.extend(pool.submit(drug, row) for row in listed)
+
+            def first_round_first(fn, items):
+                futures = [pool.submit(fn, item) for item in items]
+                ask_later()
+                return [future.result() for future in futures]
+
+            poses = self._poses([(*_pose_ref(data, row), row) for row in listed], first_round_first)
+            ask_later()
+            structure, drugs_of_rows = later[0].result(), [future.result() for future in later[1:]]
         checks, statuses = list(self.meta.get("pb_checks") or []), list(self.meta.get("pb_status") or [])
         items, ligands = [], {}
-        for row, (blocks, top, info, across) in zip(listed, fetched):
+        for row, (blocks, top), (info, across) in zip(listed, poses, drugs_of_rows):
             pockets = []
             for k, block in enumerate(blocks, 1):
                 modes = pdbqt.parse_modes(block) if block else []
@@ -1113,7 +1135,7 @@ class Atlas:
         pockets = sorted(data.get("pockets") or [], key=lambda p: p["rank"])
         docked = [int(p["rank"]) for p in pockets]
         protein = {"id": uniprot, "name": name_part(uniprot), "key": f"structures/{data['af_id']}.pdb",
-                   "pdb": self._structure(data), "docked": docked, "n": len(drugs), "rows": items, "topNote": top_note,
+                   "pdb": structure, "docked": docked, "n": len(drugs), "rows": items, "topNote": top_note,
                    "pockets": [{"rank": int(p["rank"]), "score": _num(p.get("score"), 2),
                                 "probability": _num(p.get("probability"), 3),
                                 "center": [_num(x, 2) for x in p.get("center") or []],
@@ -1140,8 +1162,9 @@ class Atlas:
             where it stopped).
 
         Returns the folder's path. Every file is a byte-identical copy of the release's file, checked against the
-        release's MANIFEST.json (size and sha256; salt_forms/, which it does not list, by size). In the folder,
-        best_scores(ligand=...) and search() list its proteins only (and every drug).
+        release's MANIFEST.json (size and sha256; salt_forms/ and LICENSE, which it does not list, by size). In the
+        folder, best_scores(ligand=...) and search() list its proteins only (and every drug).
+        The folder carries the release's LICENSE (the licence of the data), if the release has one.
         """
         uniprots = self._protein_list(proteins)
         out = os.path.abspath(os.path.expanduser(os.fspath(out)))
@@ -1180,7 +1203,8 @@ class Atlas:
 
     def _subset_files(self, uniprots: List[str]) -> Dict[str, Tuple[Optional[int], Optional[str]]]:
         """The files of a download of these proteins: path -> (bytes, sha256) as the release's MANIFEST.json lists
-        them; for a file it does not list (salt_forms/), its size and None."""
+        them; for a file it does not list (salt_forms/, LICENSE), its size and None. salt_forms/ and LICENSE are left
+        out if the source does not have them (LICENSE even if its MANIFEST.json lists it, as a download's does)."""
         try:
             listed = self.source.json("MANIFEST.json")["files"]
         except FileNotFoundError:
@@ -1199,13 +1223,14 @@ class Atlas:
         names += [f"tables/{name}.parquet" for name in SUBSET_TABLES] + list(SUBSET_FILES)
         files = {}
         for rel in dict.fromkeys(names):
-            if rel in listed:
+            if rel in listed and rel != "LICENSE":  # LICENSE: its size is asked even when listed (is it there?)
                 files[rel] = (int(listed[rel]["bytes"]), listed[rel]["sha256"])
                 continue
             try:
-                files[rel] = (self.source.size(rel), None)
+                files[rel] = (self.source.size(rel), (listed.get(rel) or {}).get("sha256"))
             except FileNotFoundError:
-                if not rel.startswith("salt_forms/"):  # salt_forms/ is in the public copy of the release only
+                # salt_forms/ is in the public copy of the release only; an older release or download has no LICENSE
+                if not (rel.startswith("salt_forms/") or rel == "LICENSE"):
                     raise
         return files
 
@@ -1272,8 +1297,11 @@ def _earlier_download(out: str, release: str) -> List[str]:
         what = f"release {label}" if label and label != release else "a PocketVina Atlas release it did not write"
         raise ValueError(f"{out} holds {what}: {rule}")
     if os.path.isdir(out):
-        others = sorted(name for name in os.listdir(out) if ".tmp-" not in name
-                        and name not in _SUBSET_FOLDERS + SUBSET_FILES + ("MANIFEST.json",))
+        names = [name for name in os.listdir(out) if ".tmp-" not in name]
+        # a download that stopped: files of its own. A LICENSE alone is someone's own, not one (it would be replaced):
+        # a download starts copying LICENSE after every other file, so their folders are there with it
+        others = sorted(name for name in names if name not in _SUBSET_FOLDERS + SUBSET_FILES + ("MANIFEST.json",)
+                        or names == ["LICENSE"])
         if others:
             raise ValueError(f"{out} is not empty (it has {', '.join(others[:3])}{', ...' if len(others) > 3 else ''})"
                              f": {rule}")

@@ -1,8 +1,8 @@
-"""3D views of docked poses for notebooks (Mol* through MolViewSpec, or py3Dmol) and a table of the best pairs.
+"""3D views of docked poses for notebooks (Mol* through MolViewSpec, or py3Dmol) and a table of the pairs.
 
     from pocketvina import viz
-    viz.table("results")                                   # best pose per protein x ligand, best first
-    viz.show("results", "AF-P00533-F1-model_v4", "gefitinib")          # best pose (the stored SDF)
+    viz.table("results")                                   # one pose per pair, highest-affinity first
+    viz.show("results", "AF-P00533-F1-model_v4", "gefitinib")          # that pose (the stored SDF)
     viz.show("results", "AF-P00533-F1-model_v4", "gefitinib", pocket=2, mode=3)
     viz.show_modes("results", "AF-P00533-F1-model_v4", "gefitinib", pocket=2)
     viz.to_html("results", "AF-P00533-F1-model_v4", "gefitinib", path="pose.html")   # a file to share
@@ -452,7 +452,7 @@ def _load_pose(res: Results, protein: str, ligand, pocket, mode) -> _Pose:
     lid = res.ligand_id(i)
     if pocket is None:
         if operator.index(mode) != 1:
-            raise ValueError("mode needs a pocket: pass pocket=<rank> (pocket=None shows the best pose)")
+            raise ValueError("mode needs a pocket: pass pocket=<rank> (pocket=None shows the highest-affinity pose)")
         return _best_pose(res, protein, i, lid)
     return _pocket_poses(res, protein, i, lid, pocket, [mode])[0]
 
@@ -860,10 +860,10 @@ def show(results: ResultsArg, protein: str, ligand, pocket: Optional[int] = None
     """3D view of a ligand's pose in a protein; the notebook draws it when it is the cell's result.
 
     ``results``: a results directory (path) or ``io.results.Results``; ``ligand``: ligand_id or ligand_idx.
-    ``pocket=None``: the best pose (the stored SDF of section A; the raw PDBQT model if there is none); else mode
-    ``mode`` of that pocket (P2Rank rank), converted to SDF in memory (``convert.pose_to_sdf``) or, if that fails,
-    the raw PDBQT model. Residues within ``pocket_radius`` A of the pose are drawn as sticks (and a faint surface if
-    ``surface``).
+    ``pocket=None``: the highest-affinity pose (the stored SDF of section A; the raw PDBQT model if there is none);
+    else mode ``mode`` of that pocket (P2Rank rank), converted to SDF in memory (``convert.pose_to_sdf``) or, if
+    that fails, the raw PDBQT model. Residues within ``pocket_radius`` A of the pose are drawn as sticks (and a
+    faint surface if ``surface``).
 
     ``backend``: ``"molstar"`` returns a ``MolstarView`` (a MolViewSpec scene with ``data={"protein.pdb": ...,
     "ligand.sdf": ...}``, shown with ``molviewspec.molstar_notebook``), ``"py3dmol"`` a ``py3Dmol.view``,
@@ -882,7 +882,7 @@ def show(results: ResultsArg, protein: str, ligand, pocket: Optional[int] = None
 def show_modes(results: ResultsArg, protein: str, ligand, pocket: Optional[int], *, backend: str = "auto",
                width=950, height=600, pocket_radius: float = 5.0, surface: bool = True,
                molstar_version: Optional[str] = None, ui: str = "stories"):
-    """All modes of a ligand in one pocket (``pocket=None``: the pocket of its best pose).
+    """All modes of a ligand in one pocket (``pocket=None``: the pocket of its highest-affinity pose).
 
     Mol*: one MolViewSpec snapshot per mode (residues near that mode, the mode table in the description), in the
     MVS Stories page (``ui="stories"``, with previous/next buttons) or the plain viewer (``ui="viewer"``, Mol*'s
@@ -909,7 +909,7 @@ def show_modes(results: ResultsArg, protein: str, ligand, pocket: Optional[int],
     residues = near_residues(receptor.atoms, np.concatenate([p.xyz for p in poses]), radius)
     best = min((p for p in poses if p.affinity is not None), key=lambda p: p.affinity, default=poses[0])
     label = (f"{protein} | {lid} | pocket {poses[0].pocket} | modes {poses[0].mode}-{poses[-1].mode} | "
-             f"best {best.affinity_text}")
+             f"lowest Vina score {best.affinity_text}")
     view = _py3dmol_view(receptor, poses, residues, label, surface=surface, width=width, height=height,
                          animate=len(poses) > 1)
     if len(poses) > 1 and any(p.fmt != poses[0].fmt for p in poses):
@@ -935,7 +935,7 @@ def to_html(results: ResultsArg, protein: str, ligand, pocket: Optional[int] = N
 
 
 def table(results: ResultsArg, top: Optional[int] = 50, protein=None) -> pd.DataFrame:
-    """Best pose per protein x ligand, best (lowest) Vina score first; ``top=None`` for all rows.
+    """Highest-affinity pose per protein x ligand, lowest Vina score first; ``top=None`` for all rows.
 
     Columns: protein_id, ligand_id, smiles_docked, vina, best_pocket, best_mode, ligand_efficiency (``-vina /
     n_heavy`` of the docked fragment), and pb_status / pb_valid when PoseBusters results are there. Ligands without

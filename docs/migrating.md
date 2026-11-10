@@ -57,7 +57,7 @@ output/
 
 - The engine outputs are kept unchanged. `pocketvina export --results results --what all --format csv --out tables`
   writes the same `combined_results.csv` again.
-- Without `--smiles`, the best poses are not converted to SDF. The viewers then show the PDBQT.
+- Without `--smiles`, the highest-affinity poses are not converted to SDF. The viewers then show the PDBQT.
 - Running the import again resumes it.
 
 The same in Python:

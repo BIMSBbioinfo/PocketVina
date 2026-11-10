@@ -1267,9 +1267,9 @@ class _Docking:
         self.n_docked += 1
         if self.buster is not None:
             self.buster.submit(pid)
-        logger.info("%s (%d/%d): docking took %.1f s: %d pockets x %d ligands, %d runs %s, %d best poses", pid, job.n,
-                    self.total, summary["docking_s"], summary["n_pockets_docked"], len(self.lig.ok), summary["n_runs"],
-                    summary["runs_by_status"], summary["n_with_pose"])
+        logger.info("%s (%d/%d): docking took %.1f s: %d pockets x %d ligands, %d runs %s, %d highest-affinity poses",
+                    pid, job.n, self.total, summary["docking_s"], summary["n_pockets_docked"], len(self.lig.ok),
+                    summary["n_runs"], summary["runs_by_status"], summary["n_with_pose"])
         if job.memory is not None:
             logger.info("%s (%d/%d): peak memory while docking: %s", pid, job.n, self.total,
                         gpu.format_memory(job.memory))

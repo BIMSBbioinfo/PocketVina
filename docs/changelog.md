@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.3.1
+
+### Added
+
+- `pair.export(protein=True)` also writes the protein the poses were docked into, as a PDB file next to the poses,
+  and returns both paths. `pair.export(ligand=False, protein=True)` writes only the protein. `pair.export_protein()`
+  still works.
+- `atlas.download()` also copies the release's `LICENSE` (the licence of the Atlas data) into the folder. A release
+  without one is downloaded as before.
+
+### Changed
+
+- With `theme="dark"` the page of `show()` is dark from the start, not white until its script has loaded.
+- The hint after a download in the page of `show()` says "Nothing downloaded? Downloads are blocked here: in Python,
+  pair.export() writes the poses and pair.export(protein=True) the protein too." It said "This notebook blocks
+  downloads: use pair.export() in Python.", also outside notebooks, and named no way to save the protein. The
+  Download tab names `pair.export(protein=True)` instead of `pair.export_protein()`.
+- `pair.export("out/")` and `pair.export_protein("out/")`, a path that ends in "/", write into the folder `out`,
+  made if needed. They wrote a file named `out`.
+- A path without an extension is a folder too: `pair.export("poses")` and `pair.export_protein("poses")` write into
+  the folder `poses`, made if needed, as `pocketvina atlas export --out poses` does. They wrote a file named `poses`
+  (such a file, written before, is now an error that says so, and is kept). A file whose extension is not its
+  format's is an error, and nothing is written: `pair.export("abl1.pdb")` (and `--out abl1.pdb`) says "poses are
+  written as SDF; use a .sdf name, ..."; it wrote SDF poses into `abl1.pdb`. The protein's file must end in `.pdb`.
+- The PocketVina Atlas is read faster over the internet, most of all far from its server (e.g. in Colab). Connections
+  to the server stay open and are reused, nearby parts of a file come in one request, and parts read once are kept in
+  memory, so a page shown again needs no request. `pair.show()` of the documentation example took 10 s in Colab
+  before. With 110 ms added to every round trip to the server, `select()` and `show()` of that example now take
+  2 s instead of 9 s.
+- `show()` builds its page faster (the page's data is compressed at a lower level; the page is a little larger).
+- What a selection shows (`pair` in a notebook or a console) and the page of `show()` use the words of the Atlas
+  website: "highest-affinity pose" instead of "best pose". The column "best Vina (kcal/mol)" of a selection is now
+  "lowest Vina score (kcal/mol)", the column "Best poses" of the page's Pockets tab is now "Highest-affinity poses",
+  and a page that lists only some ligands says "The top 100 of ..." instead of "The best 100 of ...". The label of
+  `viz.show_modes` with py3Dmol says "lowest Vina score" instead of "best".
+- The [Atlas page](atlas.md) of this documentation goes step by step and shows the real output of each step,
+  with the 3D page of ABL1 and imatinib.
+- The pages [Getting started](quickstart.md), [3D views](visualisation.md), [PoseBusters checks](posebusters.md),
+  [Results format](output-format.md) and [Installation](installation.md) also show their code one step at a time,
+  each step with its own sentence.
+- Messages, log lines and the docstrings of the [Python API](api.md) say "highest-affinity" or "lowest Vina
+  score" where they said "best" for affinity. `pocketvina dock` and `pocketvina info` print
+  "highest-affinity poses: ..." instead of "best poses: ...", and `execute_docking()`, when it shows only some
+  of the run's pairs, ends with "The top 50 of ..." instead of "Best 50 of ...". `pocketvina info --json` is
+  unchanged.
+
 ## 0.3.0
 
 ### Added

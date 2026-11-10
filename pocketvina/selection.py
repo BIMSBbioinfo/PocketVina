@@ -1,13 +1,14 @@
 """One protein x ligand pair of a results directory: pick it with ``select``, then show, check or save it.
 
-    pair = pocketvina.select(protein="1fbl", ligand="molecule1")                      # the pair's best pose
+    pair = pocketvina.select(protein="1fbl", ligand="molecule1")                      # its highest-affinity pose
     pair = pocketvina.select(protein="1fbl", ligand="molecule1", pocket=2, mode=3)    # one pose
-    pair = pocketvina.select(protein="1fbl", ligand="molecule1", pocket="all")        # best pose in every pocket
+    pair = pocketvina.select(protein="1fbl", ligand="molecule1", pocket="all")        # that pose in each pocket
     pair = pocketvina.select(protein="1fbl", ligand="molecule1", pocket=2, mode="all")  # every mode of pocket 2
     pair            # in a notebook: a short summary
     pair.show()     # 3D, like the PocketVina Atlas website (pocketvina.workspace)
     pair.bust()     # PoseBusters on the selected poses, in memory; returns a table
     pair.export()   # one SDF (or PDBQT) file of the selected poses, e.g. PV_1fbl_molecule1_top.sdf
+    pair.export(protein=True)   # those poses and the protein as PDB (PV_1fbl.pdb), next to each other
 
 ``select`` is a method of ``Results`` and ``PocketVinaGPU``; ``Atlas.select`` gives the same ``Selection`` for a pair
 of the PocketVina Atlas. The selection is fixed when it is made (the poses are read then); ``show``, ``bust`` and
@@ -34,6 +35,7 @@ EXPORT_FORMATS = ("sdf", "pdbqt")
 MAX_NAME_PART = 100  # characters of a protein or ligand id in a file name (as Results.export's MAX_STEM)
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
 _SHOWN_IDS = 5  # valid ids listed in an error message
+_SCORE_HEADER = "lowest Vina score (kcal/mol)"  # header of the per-pocket table of a selection's summary
 
 PocketArg = Union[None, int, str]
 ModeArg = Union[int, str]
@@ -49,6 +51,25 @@ def pose_name(protein: str, ligand: str, *parts) -> str:
     """``PV_<protein>_<ligand>[_<part>...]``: the PocketVina Atlas ID of a pair (``lib/keys.ts``) with "PV_" in front,
     ids made file-name safe; e.g. ``pose_name("1fbl", "molecule1", "pk2", "m03")`` is ``PV_1fbl_molecule1_pk2_m03``."""
     return "_".join(["PV", name_part(protein), name_part(ligand), *map(str, parts)])
+
+
+def _target(path, default: str) -> str:
+    """The file to write: ``path``, or ``default`` in the folder ``path`` (None: the working folder). A path is a
+    folder if it is one, ends in "/" or has no extension, as the CLI's --out ("my.poses" has one; "results_v2" and
+    ".poses" none, as os.path.splitext); a missing folder is made when the file is written. A file without an
+    extension, e.g. "poses" written by 0.3.0, is an error."""
+    if path is None:
+        return os.path.join(os.getcwd(), default)
+    given = os.fspath(path)
+    path = os.path.abspath(os.path.expanduser(given))
+    if given.endswith(os.sep) or os.path.isdir(path):
+        return os.path.join(path, default)
+    if not os.path.splitext(path)[1]:
+        if os.path.isfile(path):
+            raise ValueError(f"{path} is a file, but a path without an extension is a folder: use e.g. "
+                             f"{os.path.basename(path)}{os.path.splitext(default)[1]} for a file")
+        return os.path.join(path, default)
+    return path
 
 
 def _few(values: List[str]) -> str:
@@ -80,8 +101,8 @@ def _check_pocket(pocket) -> PocketArg:
     if pocket is None or pocket == "all":
         return pocket
     if isinstance(pocket, (bool, np.bool_)) or not isinstance(pocket, numbers.Integral) or pocket < 1:
-        raise ValueError(f"pocket must be a pocket number (1, 2, ...), None (the pocket of the best pose) or 'all', "
-                         f"got {pocket!r}")
+        raise ValueError(f"pocket must be a pocket number (1, 2, ...), None (the pocket of the highest-affinity "
+                         f"pose) or 'all', got {pocket!r}")
     return int(pocket)
 
 
@@ -89,8 +110,8 @@ def _check_mode(mode) -> ModeArg:
     if mode == "all" and isinstance(mode, str):
         return mode
     if isinstance(mode, (bool, np.bool_)) or not isinstance(mode, numbers.Integral) or mode < 1:
-        raise ValueError(f"mode must be a mode number (1 = the best mode of the pocket, 2, 3, ...) or 'all', "
-                         f"got {mode!r}")
+        raise ValueError(f"mode must be a mode number (1 = the highest-affinity mode of the pocket, 2, 3, ...) or "
+                         f"'all', got {mode!r}")
     return int(mode)
 
 
@@ -165,10 +186,11 @@ def select(results: Results, protein: str, ligand, pocket: PocketArg = None, mod
 
     protein: a protein id as in best_scores(), e.g. "1fbl".
     ligand: a ligand id (its name in the SMILES file) as in best_scores(), e.g. "molecule1".
-    pocket: a pocket number (P2Rank rank), e.g. 2; None (default): the pocket of the pair's best pose; "all": every
-        pocket the ligand was docked into.
-    mode: 1 (default): the best mode of the pocket; 2, 3, ...: that mode (the engine numbers them best first); "all":
-        every mode of the pocket(s). With pocket="all" and a mode number, the pockets without that mode are left out.
+    pocket: a pocket number (P2Rank rank), e.g. 2; None (default): the pocket of the pair's highest-affinity pose;
+        "all": every pocket the ligand was docked into.
+    mode: 1 (default): the highest-affinity mode of the pocket; 2, 3, ...: that mode (the engine numbers them
+        highest-affinity first); "all": every mode of the pocket(s). With pocket="all" and a mode number, the pockets
+        without that mode are left out.
 
     Unknown proteins and ligands raise ``KeyError`` (listing some valid ids); a pocket that was not docked, a mode
     out of range, or a ligand without any pose raise ``ValueError``.
@@ -239,7 +261,7 @@ class Selection:
     ``Atlas.select``).
 
     Attributes: ``protein``, ``ligand`` (ids; for the Atlas the UniProt accession and the PVL ID), ``smiles``,
-    ``pocket`` and ``mode`` (as selected), ``vina`` (the pair's best Vina score, kcal/mol), ``best_pocket`` /
+    ``pocket`` and ``mode`` (as selected), ``vina`` (the pair's lowest Vina score, kcal/mol), ``best_pocket`` /
     ``best_mode`` (where that pose is), ``poses`` (a table: pocket, mode, vina, rmsd_lb, rmsd_ub), ``name`` (the file
     name stem, e.g. ``PV_1fbl_molecule1_top``).
     """
@@ -266,9 +288,9 @@ class Selection:
 
     @property
     def name(self) -> str:
-        """File name stem of the selection (Atlas IDs with "PV_"): ``PV_<protein>_<ligand>_top`` (the best pose),
-        ``..._pk2_m03`` (one pose), ``..._pk2_modes`` (all modes of a pocket), ``..._pocketall_top`` (the best pose of
-        each pocket), ``..._pocketall_modes``, ``..._pocketall_m03``."""
+        """File name stem of the selection (Atlas IDs with "PV_"): ``PV_<protein>_<ligand>_top`` (the highest-affinity
+        pose), ``..._pk2_m03`` (one pose), ``..._pk2_modes`` (all modes of a pocket), ``..._pocketall_top`` (the
+        highest-affinity pose in each pocket), ``..._pocketall_modes``, ``..._pocketall_m03``."""
         if self.pocket is None and self.mode == 1:
             return pose_name(self.protein, self.ligand, "top")
         where = "pocketall" if self.pocket == "all" else f"pk{self._poses[0].pocket}"
@@ -283,13 +305,17 @@ class Selection:
     # --- summary ---------------------------------------------------------------------------------------------------
 
     def _what(self) -> str:
-        pocket = {None: f"pocket {self.best_pocket} (best pose)", "all": "every docked pocket"}.get(
-            self.pocket, f"pocket {self.pocket}")
-        mode = "every mode" if self.mode == "all" else "best mode" if self.mode == 1 else f"mode {self.mode}"
-        return f"{pocket}, {mode}: {len(self._poses)} pose{'s' if len(self._poses) != 1 else ''}"
+        if self.pocket == "all":
+            what = ("the highest-affinity pose in each pocket" if self.mode == 1 else
+                    "every mode in each pocket" if self.mode == "all" else f"mode {self.mode} in each pocket")
+        else:
+            where = f"pocket {self.best_pocket if self.pocket is None else self.pocket}"
+            what = (f"{where}, the highest-affinity pose" if self.mode == 1 else
+                    f"{where}, every mode" if self.mode == "all" else f"{where}, mode {self.mode}")
+        return f"{what}: {len(self._poses)} pose{'s' if len(self._poses) != 1 else ''}"
 
     def _per_pocket(self) -> List[Tuple[int, float, str]]:
-        """(pocket, best Vina score of the selected poses there, selected modes) per pocket."""
+        """(pocket, lowest Vina score of the selected poses there, selected modes) per pocket."""
         out = []
         for k in dict.fromkeys(p.pocket for p in self._poses):
             ps = [p for p in self._poses if p.pocket == k]
@@ -301,11 +327,10 @@ class Selection:
 
     def __repr__(self):
         lines = [f"Selection {pose_name(self.protein, self.ligand)}: protein {self.protein}, ligand {self.ligand}, "
-                 f"{self._what()}", f"  SMILES: {self.smiles}",
-                 "  pocket  best Vina (kcal/mol)  modes"]
+                 f"{self._what()}", f"  SMILES: {self.smiles}", f"  pocket  {_SCORE_HEADER}  modes"]
         for k, vina, modes in self._per_pocket():
             star = " *" if k == self.best_pocket else "  "
-            lines.append(f"  {k:>4}{star} {vina:>20.1f}  {modes}")
+            lines.append(f"  {k:>4}{star}{vina:>{len(_SCORE_HEADER) + 2}.1f}  {modes}")
         return "\n".join(lines)
 
     def _repr_html_(self) -> str:
@@ -316,9 +341,9 @@ class Selection:
             for k, vina, modes in self._per_pocket())
         return (f"<div><b>{e(pose_name(self.protein, self.ligand))}</b>: protein <b>{e(self.protein)}</b>, ligand "
                 f"<b>{e(self.ligand)}</b>, {e(self._what())}<br><span style='font-family:monospace'>"
-                f"{e(self.smiles)}</span><table><thead><tr><th>pocket</th><th>best Vina (kcal/mol)</th>"
+                f"{e(self.smiles)}</span><table><thead><tr><th>pocket</th><th>{_SCORE_HEADER}</th>"
                 f"<th>modes</th></tr></thead><tbody>{rows}</tbody></table>"
-                f"<small>&#9733; the pocket of the pair's best pose ({self.vina:.1f} kcal/mol). "
+                f"<small>&#9733; the pocket of the pair's highest-affinity pose ({self.vina:.1f} kcal/mol). "
                 f"pair.show(), pair.bust(), pair.export()</small></div>")
 
     # --- 3D --------------------------------------------------------------------------------------------------------
@@ -335,8 +360,8 @@ class Selection:
             PocketVina Atlas website when the page opens (needs internet, a much smaller page).
         theme: "auto" (default: as the browser), "light" or "dark".
         height: height of the view in a notebook, in pixels, e.g. 900.
-        max_ligands: ligands listed in Top hits, best first, e.g. 50 (default 100; 25 for a pair of the PocketVina
-            Atlas, whose poses are fetched).
+        max_ligands: ligands listed in Top hits, highest-affinity first, e.g. 50 (default 100; 25 for a pair of the
+            PocketVina Atlas, whose poses are fetched).
 
         The 3D view is drawn with Mol*, described in the `"Mol* Viewer: modern web app for 3D visualization and analysis
         of large biomolecular structures" <https://doi.org/10.1093/nar/gkab314>`_ paper.
@@ -404,17 +429,20 @@ class Selection:
 
     # --- files -----------------------------------------------------------------------------------------------------
 
-    def _path(self, path, fmt: str) -> str:
-        default = f"{self.name}.{fmt}"
-        if path is None:
-            return os.path.join(os.getcwd(), default)
-        path = os.path.abspath(os.path.expanduser(os.fspath(path)))
-        if os.path.isdir(path):
-            return os.path.join(path, default)
-        ext = os.path.splitext(path)[1].lower().lstrip(".")
+    def _path(self, path, fmt: str, protein: bool) -> str:
+        """The poses' file (``_target``); a file named by ``path`` must end in .<fmt>, checked before anything is
+        written (with protein=True first: not the protein's file name)."""
+        target = _target(path, f"{self.name}.{fmt}")
+        if protein and os.path.basename(target) == f"PV_{name_part(self.protein)}.pdb":
+            raise ValueError(f"{target} is the protein's file: give the poses another name, e.g. {self.name}.{fmt}")
+        ext = os.path.splitext(target)[1].lower().lstrip(".")
         if ext in EXPORT_FORMATS and ext != fmt:
-            raise ValueError(f"{path} ends in .{ext} but fmt={fmt!r}: pass fmt={ext!r} for a {ext.upper()} file")
-        return path
+            raise ValueError(f"{target} ends in .{ext} but fmt={fmt!r}: pass fmt={ext!r} for a {ext.upper()} file")
+        if ext != fmt:
+            other = "pdbqt" if fmt == "sdf" else "sdf"
+            raise ValueError(f"{target}: poses are written as {fmt.upper()}; use a .{fmt} name, or fmt={other!r} "
+                             f"for .{other}, or a / at the end for a folder")
+        return target
 
     def _sdf(self) -> bytes:
         from . import convert
@@ -445,18 +473,39 @@ class Selection:
             out.append(model if model.endswith(b"\n") else model + b"\n")
         return b"".join(out)
 
-    def export(self, path=None, fmt: str = "sdf") -> str:
-        """Write the selected poses into one file; returns its path.
+    def export(self, path=None, fmt: str = "sdf", *, protein: bool = False,
+               ligand: bool = True) -> Union[str, List[str]]:
+        """Write the selected poses into one file; returns its path. With protein=True also the protein.
 
-        path: the file, e.g. "1fbl_molecule1.sdf", or a folder; None (default): ``<name>.<fmt>`` in the working
-            folder, e.g. PV_1fbl_molecule1_top.sdf.
+        path: the file, e.g. "1fbl_molecule1.sdf" (.sdf, or .pdbqt with fmt="pdbqt"), or a folder, e.g. "poses",
+            made if needed: a path without an extension is a folder ("my.poses" has one, "results_v2" and ".poses"
+            none). None (default): ``<name>.<fmt>`` in the working folder, e.g. PV_1fbl_molecule1_top.sdf. With
+            ligand=False the protein's file, e.g. "1fbl.pdb", or a folder.
         fmt: "sdf" (default): one record per pose (converted from the docked model with the ligand's SMILES), with
             the protein, ligand, pocket, mode and Vina score (affinity, kcal/mol) as properties; "pdbqt": the docked
-            models as the engine wrote them, one MODEL per pose.
+            models as the engine wrote them, one MODEL per pose. Only for the poses: the protein is always PDB.
+        protein: True: also write the protein the poses were docked into as a PDB file, ``PV_<protein>.pdb`` next to
+            the poses, e.g. PV_1fbl.pdb; for a pair of the PocketVina Atlas the AlphaFold model the drugs were docked
+            into. False (default): only the poses.
+        ligand: True (default): write the poses. False, with protein=True: only the protein, the same as
+            ``export_protein``.
+
+        Returns the path of the file written, e.g. ".../PV_1fbl_molecule1_top.sdf"; with protein=True (and
+        ligand=True) a list of the two paths, poses first, e.g. [".../PV_1fbl_molecule1_top.sdf", ".../PV_1fbl.pdb"].
         """
+        for arg, value in (("protein", protein), ("ligand", ligand)):
+            if not isinstance(value, bool):
+                raise ValueError(f"{arg} must be True or False, got {value!r}")
+        if not (ligand or protein):
+            raise ValueError("ligand=False and protein=False: nothing to write (pair.export() writes the poses, "
+                             "pair.export(protein=True) the protein too, pair.export(ligand=False, protein=True) "
+                             "only the protein)")
         if fmt not in EXPORT_FORMATS:
-            raise ValueError(f"fmt must be one of {EXPORT_FORMATS}, got {fmt!r}")
-        target = self._path(path, fmt)
+            raise ValueError(f"fmt must be one of {EXPORT_FORMATS}, got {fmt!r} (fmt is the format of the poses; "
+                             f"the protein is always PDB)")
+        if not ligand:
+            return self.export_protein(path)
+        target = self._path(path, fmt, protein)
         data = self._sdf() if fmt == "sdf" else self._pdbqt()
         os.makedirs(os.path.dirname(target), exist_ok=True)
         tmp = f"{target}.tmp-{os.getpid()}"
@@ -469,21 +518,26 @@ class Selection:
                 os.unlink(tmp)
             raise
         logger.info("%s: %d pose(s) written to %s", self.name, len(self._poses), target)
+        if protein:
+            return [target, self.export_protein(os.path.dirname(target))]
         return target
 
     def export_protein(self, path=None) -> str:
-        """Write the protein the poses were docked into as a PDB file; returns its path.
+        """Write the protein the poses were docked into as a PDB file; returns its path. The same as
+        ``pair.export(ligand=False, protein=True)``.
 
-        path: the file, e.g. "1fbl.pdb", or a folder; None (default): ``PV_<protein>.pdb`` in the working folder,
-            e.g. PV_1fbl.pdb. The input structure as PDB (a PDBQT or mmCIF input converted), without crystal waters;
-            for a pair of the PocketVina Atlas the AlphaFold model the drugs were docked into.
+        path: the file, e.g. "1fbl.pdb" (.pdb), or a folder, e.g. "proteins", made if needed (a path without an
+            extension, as for export); None (default): ``PV_<protein>.pdb`` in the working folder, e.g. PV_1fbl.pdb.
+            The input structure as PDB (a PDBQT or mmCIF input converted), without crystal waters; for a pair of the
+            PocketVina Atlas the AlphaFold model the drugs were docked into.
         """
+        target = _target(path, f"PV_{name_part(self.protein)}.pdb")
+        if path is None and os.path.isdir(target):  # a folder PV_<protein>.pdb here: write into it, as 0.3.0 did
+            target = os.path.join(target, os.path.basename(target))
+        if os.path.splitext(target)[1].lower() != ".pdb":
+            raise ValueError(f"{target}: the protein is written as PDB; use a .pdb name, or a / at the end for a "
+                             "folder")
         text = self._source.protein_pdb(self.protein)
-        default = f"PV_{name_part(self.protein)}.pdb"
-        target = (os.path.join(os.getcwd(), default) if path is None
-                  else os.path.abspath(os.path.expanduser(os.fspath(path))))
-        if os.path.isdir(target):
-            target = os.path.join(target, default)
         os.makedirs(os.path.dirname(target), exist_ok=True)
         tmp = f"{target}.tmp-{os.getpid()}"
         try:
