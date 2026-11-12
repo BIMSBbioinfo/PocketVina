@@ -111,6 +111,18 @@ def test_readme_links_exist():
                 assert anchor in _anchors((ROOT / path).read_text(encoding="utf-8")), f"no heading for {target}"
 
 
+def test_readme_figure_files_exist():
+    """The figure (dark and light SVG, and the PNG that PyPI shows) has absolute raw.githubusercontent.com URLs of
+    main, so that it shows on PyPI too: each one names a file under doc/assets/ (a renamed file would break it)."""
+    raw = "https://raw.githubusercontent.com/BIMSBbioinfo/PocketVina/main/"
+    urls = re.findall(r"\b(?:src|srcset)=\"(https://raw\.githubusercontent\.com/[^\"]+)\"", COMMENT.sub("", TEXT))
+    assert len(urls) >= 3
+    for url in urls:
+        assert url.startswith(raw + "doc/assets/"), url
+        if not SDIST:  # an sdist has no doc/ (MANIFEST.in)
+            assert (ROOT / url[len(raw):]).is_file(), f"no file {url[len(raw):]}"
+
+
 @pytest.mark.parametrize("path", [".venv/pyvenv.cfg", "conda-bld/noarch/repodata.json", "docs/_build/html/index.html"])
 def test_build_folders_in_the_checkout_are_ignored(path):
     """`python -m venv .venv` (docs/installation.md), `rattler-build ... --output-dir conda-bld` (recipe/README.md)

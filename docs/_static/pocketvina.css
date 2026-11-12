@@ -38,3 +38,57 @@ body[data-theme="light"] div.pv-output pre {
     border-left-width: 3px;
   }
 }
+
+/* The figure of the landing page (index.md): pocketvina_figure.svg inlined, so its words are text. Its font is
+   Baskervville (SIL Open Font License, fonts/OFL.txt), weight 400, Latin characters only. The ink is furo's text
+   colour. The pocket labels' and the ligand's N, O and S colours are light by default (also in the SVG) and dark
+   below, keyed like furo's own dark rules: the dark theme, and "auto" on a dark system, but not in print, which furo
+   keeps light. In forced colors (high contrast) the ink is the system's text colour, like the page's text. As wide
+   as the text, like an image. */
+@font-face {
+  font-family: "Baskervville";
+  font-style: normal;
+  font-weight: 400;
+  src: url("fonts/Baskervville-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Baskervville";
+  font-style: italic;
+  font-weight: 400;
+  src: url("fonts/Baskervville-Italic.woff2") format("woff2");
+}
+svg.pv-figure {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  --pv-n: #2244dd;
+  --pv-o: #dd1a1a;
+  --pv-s: #b39900;
+}
+@media not print {
+  body[data-theme="dark"] svg.pv-figure {
+    --pv-pk1: #7fb3ee;
+    --pv-pk2: #b48ae6;
+    --pv-pk3: #e58fd8;
+    --pv-pk4: #e09a6a;
+    --pv-n: #99b8ff;
+    --pv-o: #ff8f85;
+    --pv-s: #edd973;
+  }
+  @media (prefers-color-scheme: dark) {
+    body:not([data-theme="light"]) svg.pv-figure {
+      --pv-pk1: #7fb3ee;
+      --pv-pk2: #b48ae6;
+      --pv-pk3: #e58fd8;
+      --pv-pk4: #e09a6a;
+      --pv-n: #99b8ff;
+      --pv-o: #ff8f85;
+      --pv-s: #edd973;
+    }
+  }
+}
+@media (forced-colors: active) {
+  svg.pv-figure {
+    --pv-ink: CanvasText;
+  }
+}

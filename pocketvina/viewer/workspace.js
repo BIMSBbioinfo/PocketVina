@@ -345,7 +345,12 @@
         + `<td class="r num">${fmt(r.le, 2)}</td></tr>`).join('') : `<tr><td colspan="6" class="mut">${S.prot.rows.length ? `No ligand matches “${esc(S.q)}”.` : S.prot.topNote != null ? 'No drug with a PoseBusters-valid pose.' : `No ligand has a pose in ${esc(protName(S.prot))}.`}</td></tr>`);
       return;
     }
+    // the Python lines keep the focus and their scroll when the tab is drawn again (e.g. once the 3D view has drawn), only while the page
+    // has the focus: else focus() would take it from where the user is now (Firefox: a notebook cell outside the page's frame)
+    const a = document.hasFocus() ? document.activeElement : null, py = a && a.matches('[data-python]') ? a : null, x = py ? py.scrollLeft : 0;
     set(body, S.tab === 'pair' ? pairPanel() : S.tab === 'download' ? downloadPanel() : pocketsPanel());
+    const now = py && !py.isConnected ? body.querySelector('[data-python]') : null;
+    if (now) { now.focus({ preventScroll: true }); now.scrollLeft = x; }
   }
   // the 2D drawing (RDKit's SVG, made from the user's SMILES) as an image: nothing in it can run in the page
   function pairPanel() {
@@ -417,7 +422,8 @@
   const pythonLines = (P, r) => `pair = ${P.info ? 'atlas' : 'pocketvina'}.select(protein=${pyStr(pyProtein(P))}, ligand=${pyStr(r ? ligOf(r).id : '<ligand>')})`
     + '\npair.export(protein=True)   # the poses and the protein';
   // the Download tab (as on the Atlas site): the pair's poses, the protein, the pockets' residues and the image, then the Python lines
-  // with a copy button (a line too long for its box is cut where scroll bars are hidden, e.g. on a phone)
+  // with a copy button (a line too long for its box is cut where scroll bars are hidden, e.g. on a phone). The box takes the focus on a
+  // click, so the arrow keys scroll it and do not step the modes
   function downloadPanel() {
     const r = S.row, P = S.prot, cur = r ? pocketOf(r, S.pk) : null, py = pythonLines(P, r);
     const item = (act, label, file, note) => `<button type="button" class="link" data-act="${act}">${label}</button><span class="pv-file mono">${esc(file)}</span>`
@@ -430,7 +436,7 @@
       + item('save-protein', 'Protein (PDB)', `PV_${P.name}.pdb`, 'the structure the ligands were docked into')
       + item('save-residues', 'Pocket residues (CSV)', `PV_${P.name}_pockets.csv`, 'every P2Rank pocket: rank, score, centre, residues')
       + `<button type="button" class="link" data-act="image"${S.drawn && !S.imageBusy ? '' : ' disabled'}>Image of the view (PNG)</button><span class="pv-file mono">${esc(imageName())}</span>`
-      + `</div><div class="pv-py"><p class="small mut">In Python:${copyButton('the Python lines', py)}</p><pre class="mono" data-python>${esc(py)}</pre></div></div>`;
+      + `</div><div class="pv-py"><p class="small mut">In Python:${copyButton('the Python lines', py)}</p><pre class="mono" data-python tabindex="0" role="region" aria-label="Python lines">${esc(py)}</pre></div></div>`;
   }
   function pocketsCsv(P) {
     const q = v => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
@@ -549,9 +555,10 @@
   root.addEventListener('toggle', e => { if (e.target.matches && e.target.matches('details.pv-pop') && e.target.open) root.querySelectorAll('details.pv-pop[open]').forEach(d => { if (d !== e.target) d.open = false; }); }, true);
   // a click outside the saved image closes it; a click or tap on the toast hides it (on a phone it covers the page's bottom)
   root.addEventListener('click', e => { if (e.target.id === 'pv-shot') closeShot(); else if (e.target.id === 'pv-toast') hideToast(); });
-  // the arrow keys step through the modes, but not in a form field or the Python lines (there they scroll)
+  // the arrow keys step through the modes, but not in a form field or the Python lines (there they scroll); Escape also works from the lines
   window.addEventListener('keydown', e => {
-    if (e.target && e.target.closest && e.target.closest('input,select,textarea,pre')) return;
+    const skip = e.key === 'Escape' ? 'input,select,textarea' : 'input,select,textarea,pre';
+    if (e.target && e.target.closest && e.target.closest(skip)) return;
     if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && S.row) { e.preventDefault(); step(e.key === 'ArrowLeft' ? -1 : 1); }
     else if (e.key === 'Escape') {
       const pop = root.querySelector('details.pv-pop[open]');

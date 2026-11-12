@@ -404,7 +404,8 @@ def test_download_tab_python_lines(res):
                  r"+ '\npair.export(protein=True)   # the poses and the protein';",
                  "py = pythonLines(P, r);",
                  '<div class="pv-py"><p class="small mut">In Python:${copyButton(\'the Python lines\', py)}</p>'
-                 '<pre class="mono" data-python>${esc(py)}</pre></div>',
+                 '<pre class="mono" data-python tabindex="0" role="region" aria-label="Python lines">${esc(py)}</pre>'
+                 '</div>',
                  # the one copy button and copy of the page: data-v is the text copied, "Copied." the toast
                  'const copyButton = (label, v) => `<button type="button" class="pv-copy" data-act="copy" '
                  'data-v="${esc(v)}" title="Copy ${esc(label)}" aria-label="Copy ${esc(label)}">${ICON.copy}'
@@ -412,7 +413,7 @@ def test_download_tab_python_lines(res):
                  "else if (a === 'copy') copy(v);",
                  "try { await navigator.clipboard.writeText(text); toast('Copied.'); return; }",
                  # with the focus in the lines the arrow keys scroll them (elsewhere they step the modes)
-                 "if (e.target && e.target.closest && e.target.closest('input,select,textarea,pre')) return;"):
+                 "const skip = e.key === 'Escape' ? 'input,select,textarea' : 'input,select,textarea,pre';"):
         assert part in js, part
     assert "const protName = P => (P.info && P.info.title) || P.id;" in js  # results pages: the protein id
     css = (VIEWER / "workspace.css").read_text(encoding="utf-8")  # one visual line each; a long one scrolls in its box
@@ -424,6 +425,32 @@ def test_download_tab_python_lines(res):
     for protein, ligand, i in pairs:
         sel = res.select(protein=protein, ligand=ligand)
         assert (sel.protein, sel.ligand_idx) == (protein, i)
+
+
+def test_python_lines_take_the_focus():
+    """A click or tap into the Download tab's Python lines focuses their box (tabindex 0, a scroll region named
+    "Python lines"), so there the arrow keys scroll it and do not step the modes. In 0.3.2 a click left the focus on
+    the page, and the arrows stepped the modes and switched to Selected pair. Escape still closes things from the box.
+    The box keeps the focus when the tab is drawn again (once the 3D view has drawn), but only while the page has the
+    focus: in Firefox, focus() took it from a notebook cell outside the page's frame. The panel leaves room for the
+    box's focus ring (the page's own :focus-visible outline) at its left edge and below the lines."""
+    js = (VIEWER / "workspace.js").read_text(encoding="utf-8")
+    assert '<pre class="mono" data-python tabindex="0" role="region" aria-label="Python lines">${esc(py)}</pre>' in js
+    assert js.count("<pre") == 1
+    for part in ("const skip = e.key === 'Escape' ? 'input,select,textarea' : 'input,select,textarea,pre';",
+                 "if (e.target && e.target.closest && e.target.closest(skip)) return;",
+                 "if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && S.row) { e.preventDefault(); "
+                 "step(e.key === 'ArrowLeft' ? -1 : 1); }",
+                 "const a = document.hasFocus() ? document.activeElement : null, "
+                 "py = a && a.matches('[data-python]') ? a : null, x = py ? py.scrollLeft : 0;",
+                 "const now = py && !py.isConnected ? body.querySelector('[data-python]') : null;",
+                 "if (now) { now.focus({ preventScroll: true }); now.scrollLeft = x; }"):
+        assert part in js, part
+    assert "closest('input,select,textarea,pre')) return;" not in js  # Escape did nothing from the box
+    css = (VIEWER / "workspace.css").read_text(encoding="utf-8")
+    assert ":focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }" in css
+    assert ".pv-body { flex: 1; min-height: 0; overflow-y: auto; padding: 0 4px; margin-left: -4px; }" in css
+    assert ".pv-py { margin-top: 12px; padding-bottom: 4px; }" in css
 
 
 def test_tab_row_wraps_in_a_narrow_panel():

@@ -2,7 +2,7 @@ import os
 
 from .main import P2RankConfig, P2RankProcessor, Paths, PocketConfig, PocketVinaConfig, PocketVinaGPU
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"
 # not run_atlas or Results (see __getattr__): `from pocketvina import *` would import pyarrow, which the "files"
 # format lacks
 __all__ = ["PocketVinaGPU", "P2RankProcessor", "PocketVinaConfig", "P2RankConfig", "PocketConfig", "Paths"]
