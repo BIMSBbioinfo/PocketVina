@@ -2,7 +2,8 @@
 /* PocketVina workspace (pocketvina/workspace.py, README.md): the PocketVina Atlas website's protein page (components/ProteinWorkspace.tsx,
  * Viewer.tsx and cells.tsx, file names from lib/keys.ts; commit 40e8d59) rebuilt in plain JavaScript for a self-contained page: the 3D
  * view (viewer.js of the site in a frame, see bridge.js) with its legend and protein style buttons, the pocket chips, Reset view and
- * Save image under it, beside the tabs Top hits, Selected pair and Pockets; a protein menu when the page holds several proteins. The
+ * Save image under it, beside the tabs Top hits, Selected pair, Pockets and Download (the files, and Python lines that select the shown
+ * pair and save it: pocketvina.select(protein=<P.id>, ligand=<L.id>)); a protein menu when the page holds several proteins. The
  * page's data (workspace.py: workspace_data) and the frame's code are in the script elements #pv-data and #pv-assets (JSON, gzip,
  * base64). Every pose is in the data: no request is made (with molstar="url" the frame loads the Mol* bundle from the Atlas website).
  * A page of the PocketVina Atlas (atlas.py: Atlas._page) has optional fields, drawn only when present, with their wording in the data:
@@ -11,7 +12,8 @@
  * identifiers (L.ids: rows of label, value, link, tooltip, short text of a collapsed row; ChEMBL ID, ATC, synonyms) and the stored
  * PoseBusters result of each pair's highest-affinity pose (r.pb); the text above Top hits (P.topNote: its rows are the site's Top hits,
  * the PoseBusters-valid drugs; r.rank counts the drugs and is null for a row that is not ranked) and the protein named by its gene in
- * the texts (P.info.title). Links open in a new tab (target=_blank, rel=noopener noreferrer), only http(s) addresses.
+ * the texts (P.info.title), also in the Python lines: atlas.select(protein=<gene, or P.id for a title of several genes>, ligand=<the
+ * drug's name, L.id>). Links open in a new tab (target=_blank, rel=noopener noreferrer), only http(s) addresses.
  * Test hooks: window.__pvState() (what is selected and shown), __pvViewerLog (viewer-ready / -frame / -drawn), __pocketvinaDraws,
  * __pvLastImage (the last image saved: name, width, height, scale, bytes) and __pvFrame (the 3D frame element). */
 (() => {
@@ -203,11 +205,12 @@
   let toastTimer = 0;
   function toast(text) {
     const t = document.getElementById('pv-toast'); t.textContent = text; t.hidden = false;
-    clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, 6000);
+    clearTimeout(toastTimer); toastTimer = setTimeout(hideToast, 6000);
   }
+  function hideToast() { clearTimeout(toastTimer); document.getElementById('pv-toast').hidden = true; }
   function saveText(text, name, type) {
     download(new Blob([text], { type }), name);
-    toast(`Saved ${name}. Nothing downloaded? Downloads are blocked here: in Python, pair.export() writes the poses and pair.export(protein=True) the protein too.`);
+    toast(`Saved ${name}. If nothing was downloaded, downloads are blocked here: use the Python lines in the Download tab.`);
   }
   const dataUrlBlob = url => { const [head, b64] = url.split(','), bin = atob(b64), a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return new Blob([a], { type: head.slice(5).split(';')[0] }); };
   async function saveImage() {
@@ -406,9 +409,17 @@
     return `<dt>PoseBusters</dt><dd data-pair-pb><i class="dot" style="background:${ok ? 'var(--ok, #2e9d5b)' : bad ? 'var(--bad, #c0392b)' : 'var(--mut, #888)'}"></i> ${what}`
       + `<span class="small mut"> · highest-affinity pose only</span>${failed}</dd>`;
   }
-  // the Download tab (as on the Atlas site): the pair's poses, the protein, the pockets' residues and the image
+  // the Python lines of the Download tab, for where downloads are blocked: they select the shown pair by the ids the page shows (an
+  // Atlas page: the gene and the drug's name) and save it. An id as a Python string (a JSON string is a valid Python string)
+  const pyStr = s => JSON.stringify(String(s));
+  // select() takes a gene, not a title of several ("A; B"): then the protein's id (the UniProt accession)
+  const pyProtein = P => (/[;,/]/.test(protName(P)) ? P.id : protName(P));
+  const pythonLines = (P, r) => `pair = ${P.info ? 'atlas' : 'pocketvina'}.select(protein=${pyStr(pyProtein(P))}, ligand=${pyStr(r ? ligOf(r).id : '<ligand>')})`
+    + '\npair.export(protein=True)   # the poses and the protein';
+  // the Download tab (as on the Atlas site): the pair's poses, the protein, the pockets' residues and the image, then the Python lines
+  // with a copy button (a line too long for its box is cut where scroll bars are hidden, e.g. on a phone)
   function downloadPanel() {
-    const r = S.row, P = S.prot, cur = r ? pocketOf(r, S.pk) : null;
+    const r = S.row, P = S.prot, cur = r ? pocketOf(r, S.pk) : null, py = pythonLines(P, r);
     const item = (act, label, file, note) => `<button type="button" class="link" data-act="${act}">${label}</button><span class="pv-file mono">${esc(file)}</span>`
       + (note ? `<span class="small mut pv-dl-note">${note}</span>` : '');
     const pair = r ? (r.sdf ? item('save-sdf', 'Highest-affinity pose (SDF)', `${pairStem()}_top.sdf`) : '')
@@ -419,7 +430,7 @@
       + item('save-protein', 'Protein (PDB)', `PV_${P.name}.pdb`, 'the structure the ligands were docked into')
       + item('save-residues', 'Pocket residues (CSV)', `PV_${P.name}_pockets.csv`, 'every P2Rank pocket: rank, score, centre, residues')
       + `<button type="button" class="link" data-act="image"${S.drawn && !S.imageBusy ? '' : ' disabled'}>Image of the view (PNG)</button><span class="pv-file mono">${esc(imageName())}</span>`
-      + `</div><p class="small mut">In Python: <span class="mono">pair.export()</span> and <span class="mono">pair.export(protein=True)</span>.</p></div>`;
+      + `</div><div class="pv-py"><p class="small mut">In Python:${copyButton('the Python lines', py)}</p><pre class="mono" data-python>${esc(py)}</pre></div></div>`;
   }
   function pocketsCsv(P) {
     const q = v => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
@@ -536,9 +547,11 @@
   root.addEventListener('toggle', e => { if (e.target.matches && e.target.matches('details.pv-legend')) S.legendOpen = e.target.open; }, true);
   // one panel of the protein's information open at a time
   root.addEventListener('toggle', e => { if (e.target.matches && e.target.matches('details.pv-pop') && e.target.open) root.querySelectorAll('details.pv-pop[open]').forEach(d => { if (d !== e.target) d.open = false; }); }, true);
-  root.addEventListener('click', e => { if (e.target.id === 'pv-shot') closeShot(); });
+  // a click outside the saved image closes it; a click or tap on the toast hides it (on a phone it covers the page's bottom)
+  root.addEventListener('click', e => { if (e.target.id === 'pv-shot') closeShot(); else if (e.target.id === 'pv-toast') hideToast(); });
+  // the arrow keys step through the modes, but not in a form field or the Python lines (there they scroll)
   window.addEventListener('keydown', e => {
-    if (e.target && e.target.closest && e.target.closest('input,select,textarea')) return;
+    if (e.target && e.target.closest && e.target.closest('input,select,textarea,pre')) return;
     if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && S.row) { e.preventDefault(); step(e.key === 'ArrowLeft' ? -1 : 1); }
     else if (e.key === 'Escape') {
       const pop = root.querySelector('details.pv-pop[open]');

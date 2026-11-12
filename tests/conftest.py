@@ -255,6 +255,7 @@ def fake_engine_env(tmp_path, monkeypatch) -> FakeEngine:
     monkeypatch.setenv("POCKETVINA_KERNEL_CACHE", str(tmp_path / "kernel_cache"))
     monkeypatch.delenv("POCKETVINA_FAKE_ENGINE_SLEEP", raising=False)
     monkeypatch.delenv("POCKETVINA_FAKE_ENGINE_SHARED_RNG", raising=False)
+    monkeypatch.delenv("POCKETVINA_FAKE_ENGINE_WAIT_FOR", raising=False)
     return FakeEngine(path=str(exe), log=log)
 
 

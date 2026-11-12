@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from itertools import count
 from pathlib import Path
 
@@ -427,6 +428,37 @@ def test_sleep_hook_allows_timeout_tests(fake_engine_env, tmp_path, options, mon
     monkeypatch.setenv("POCKETVINA_FAKE_ENGINE_SLEEP", "30")
     with pytest.raises(subprocess.TimeoutExpired):
         run_fake(fake_engine_env, tmp_path, options(1), timeout=1)
+
+
+def test_wait_for_hook_lets_a_test_decide_when_a_call_ends(fake_engine_env, tmp_path, options, monkeypatch):
+    gate = tmp_path / "gate"
+    gate.mkdir()
+    monkeypatch.setenv("POCKETVINA_FAKE_ENGINE_WAIT_FOR", str(gate))
+    config = write_config(tmp_path / "c.txt", options(1))
+    proc = subprocess.Popen([fake_engine_env.path, "--config", str(config)], cwd=tmp_path,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        started = gate / f"started-{proc.pid}"
+        deadline = time.monotonic() + 60
+        while not started.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert started.exists() and proc.poll() is None  # running, and it cannot end before "go"
+        assert fake_engine_env.calls() == []
+        (gate / "go").touch()
+        assert proc.wait(timeout=60) == 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    [call] = fake_engine_env.calls()
+    assert call["go"] is True and len(call["outputs"]) == 2
+    gate2 = tmp_path / "gate2"  # no "go" in time: the call docks anyway and says so
+    gate2.mkdir()
+    monkeypatch.setenv("POCKETVINA_FAKE_ENGINE_WAIT_FOR", str(gate2))
+    monkeypatch.setattr(fe, "WAIT_FOR_S", 0.2)
+    assert fe.main(["--config", str(config)]) == 0
+    assert fake_engine_env.calls()[-1]["go"] is False and len(fake_engine_env.calls()[-1]["outputs"]) == 2
+    assert [p.name for p in gate2.iterdir()] == [f"started-{os.getpid()}"]
 
 
 def test_runs_without_wrapper(tmp_path, fake_engine_path, options):

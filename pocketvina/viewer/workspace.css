@@ -93,7 +93,7 @@ p { margin: 0; }
 .pv-chips label { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--mut); white-space: nowrap; }
 
 .pv-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.pv-tabs { display: flex; gap: 16px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.pv-tabs { display: flex; flex-wrap: wrap; gap: 0 16px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }  /* wraps in a narrow panel */
 .pv-tabs button { margin-bottom: -1px; min-height: 32px; white-space: nowrap; border: 0; border-bottom: 2px solid transparent; background: none;
   padding: 0; cursor: pointer; font-size: 14px; color: var(--mut); }
 .pv-tabs button:hover { color: var(--fg); }
@@ -129,6 +129,8 @@ p { margin: 0; }
 .pv-dl .pv-file { font-size: 12px; color: var(--mut); }
 .pv-dl h4 { margin: 12px 0 2px; }
 .pv-dl .pv-dl-note { margin: -2px 0 4px; }
+.pv-py { margin-top: 12px; }
+.pv-py pre { margin: 2px 0 0; font-size: 12px; white-space: pre; overflow-x: auto; }
 .pv-ids .pv-id { font-size: 12px; overflow-wrap: anywhere; }
 .pv-copy { margin-left: 6px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 4px; background: transparent;
   color: var(--mut); cursor: pointer; vertical-align: middle; line-height: 0; }
@@ -169,7 +171,7 @@ p { margin: 0; }
   background: repeating-conic-gradient(var(--sec) 0 25%, var(--bg) 0 50%) 0 0 / 16px 16px; }
 .pv-shot-box .pv-shot-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 14px; }
 .pv-toast { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 60; background: var(--bg); border: 1px solid var(--line);
-  border-radius: 2px; padding: 6px 12px; font-size: 13px; max-width: 90%; }
+  border-radius: 2px; padding: 6px 12px; font-size: 13px; width: max-content; max-width: min(90%, 640px); cursor: pointer; }
 .pv-toast[hidden] { display: none; }
 
 @media (max-width: 800px) {

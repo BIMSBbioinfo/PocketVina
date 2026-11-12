@@ -1105,8 +1105,8 @@ class PocketVinaGPU:
 
     def show(self, protein=None, *, path=None, molstar: str = "inline", theme: str = "auto", height: int = 760,
              max_ligands: Optional[int] = 100):
-        """The results as on the PocketVina Atlas website's protein page (3D view, Top hits, Selected pair, Pockets);
-        in a notebook below the cell, elsewhere an HTML file whose path is returned. See ``Results.show``.
+        """The results as on the PocketVina Atlas website's protein page (3D view, Top hits, Selected pair, Pockets and
+        Download); in a notebook below the cell, elsewhere an HTML file whose path is returned. See ``Results.show``.
 
         protein: a protein id, e.g. "1fbl", or a list of them; None (default): all proteins.
         path: write the page to this HTML file instead, e.g. "results.html".

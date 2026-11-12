@@ -152,7 +152,7 @@ def test_source_filter_has_everything_the_packages_are_built_from(recipe):
     for path in ("pocketvina/PocketVina-GPU", "pocketvina/Kernel1_Opt.bin", "pocketvina/boost_1_77_0/boost/config.hpp",
                  "pocketvina/p2rank_2.5/prank", "pocketvina/QuickVina2-GPU-2-1/Kernel1_Opt.bin", "tests/conftest.py",
                  "benchmark/utils/x.py", "example/ligands.txt", "test/x.py",
-                 "conda-bld/noarch/pocketvina-0.3.1-pyh4616a5c_0.conda",
+                 "conda-bld/noarch/pocketvina-0.3.2-pyh4616a5c_0.conda",
                  "output/bld/rattler-build_pocketvina_h4616a5c_1/work/pocketvina/cli.py"):
         assert not _included(path, include), path
 

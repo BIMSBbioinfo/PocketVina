@@ -377,16 +377,83 @@ def test_page_theme_from_the_first_paint(res, tmp_path):
 
 def test_download_hint_names_no_notebook():
     """After a download the page says what to do if nothing was downloaded, in words that fit any frame that blocks
-    downloads (a notebook, a website's sandboxed frame): the page's text never says "notebook"."""
+    downloads (a notebook, a website's sandboxed frame) and any page (with or without a pair in Python): use the
+    Python lines of the Download tab. The page's text never says "notebook"."""
     js = (VIEWER / "workspace.js").read_text(encoding="utf-8")
-    assert ("toast(`Saved ${name}. Nothing downloaded? Downloads are blocked here: in Python, pair.export() writes the "
-            "poses and pair.export(protein=True) the protein too.`);") in js
-    assert ('In Python: <span class="mono">pair.export()</span> and <span class="mono">pair.export(protein=True)'
-            '</span>.') in js  # the Download tab
+    assert ("toast(`Saved ${name}. If nothing was downloaded, downloads are blocked here: use the Python lines in the "
+            "Download tab.`);") in js
+    assert "Downloads are blocked here" not in js  # 0.3.1's text, also shown where the download worked
+    assert "pair.export() writes" not in js  # the hint named pair.export() also on pages with no pair in Python
     assert "export_protein" not in js
     assert "Nothing downloaded? Right-click the image &gt; <i>Save image as…</i>" in js
     text = re.sub(r"(?m)(^|\s)//.*$", "", js.split("*/", 1)[1])  # without the comments
     assert not re.search(r"notebook", text, re.IGNORECASE)
+
+
+def test_download_tab_python_lines(res):
+    """The Download tab ends with the Python lines that save its files where downloads are blocked: the shown pair
+    selected by the ids the page shows, each a Python string ("<ligand>" before a ligand is picked), and saved with
+    the protein. A results page: pocketvina.select with the protein and ligand ids, which select its pairs; an Atlas
+    page: atlas.select with the gene and the drug's name (test_atlas_view). The page's copy button (as beside the
+    ligand's ids) copies both lines as shown."""
+    js = (VIEWER / "workspace.js").read_text(encoding="utf-8")
+    for part in ("const pyStr = s => JSON.stringify(String(s));",  # a JSON string is a valid Python string
+                 "const pyProtein = P => (/[;,/]/.test(protName(P)) ? P.id : protName(P));",
+                 "const pythonLines = (P, r) => `pair = ${P.info ? 'atlas' : 'pocketvina'}.select("
+                 "protein=${pyStr(pyProtein(P))}, ligand=${pyStr(r ? ligOf(r).id : '<ligand>')})`",
+                 r"+ '\npair.export(protein=True)   # the poses and the protein';",
+                 "py = pythonLines(P, r);",
+                 '<div class="pv-py"><p class="small mut">In Python:${copyButton(\'the Python lines\', py)}</p>'
+                 '<pre class="mono" data-python>${esc(py)}</pre></div>',
+                 # the one copy button and copy of the page: data-v is the text copied, "Copied." the toast
+                 'const copyButton = (label, v) => `<button type="button" class="pv-copy" data-act="copy" '
+                 'data-v="${esc(v)}" title="Copy ${esc(label)}" aria-label="Copy ${esc(label)}">${ICON.copy}'
+                 '</button>`;',
+                 "else if (a === 'copy') copy(v);",
+                 "try { await navigator.clipboard.writeText(text); toast('Copied.'); return; }",
+                 # with the focus in the lines the arrow keys scroll them (elsewhere they step the modes)
+                 "if (e.target && e.target.closest && e.target.closest('input,select,textarea,pre')) return;"):
+        assert part in js, part
+    assert "const protName = P => (P.info && P.info.title) || P.id;" in js  # results pages: the protein id
+    css = (VIEWER / "workspace.css").read_text(encoding="utf-8")  # one visual line each; a long one scrolls in its box
+    assert ".pv-py pre { margin: 2px 0 0; font-size: 12px; white-space: pre; overflow-x: auto; }" in css
+    data = workspace.workspace_data(res, max_ligands=None)
+    assert all("info" not in P for P in data["proteins"])
+    pairs = [(P["id"], data["ligands"][str(r["lig"])]["id"], r["lig"]) for P in data["proteins"] for r in P["rows"]]
+    assert len(pairs) == 2
+    for protein, ligand, i in pairs:
+        sel = res.select(protein=protein, ligand=ligand)
+        assert (sel.protein, sel.ligand_idx) == (protein, i)
+
+
+def test_tab_row_wraps_in_a_narrow_panel():
+    """The 4 tabs need about 325 px; where the side panel is narrower (a 320 px window, or 801 to about 1020 px) the
+    row wraps instead of making the page wider than the window. Where it fits it is one row, as before."""
+    css = (VIEWER / "workspace.css").read_text(encoding="utf-8")
+    assert (".pv-tabs { display: flex; flex-wrap: wrap; gap: 0 16px; border-bottom: 1px solid var(--line); "
+            "margin-bottom: 12px; }") in css
+    js = (VIEWER / "workspace.js").read_text(encoding="utf-8")
+    assert '<div class="pv-tabs" role="tablist" aria-label="Panels" id="pv-tabs"></div>' in js
+    assert ("[['top', 'Top hits'], ['pair', 'Selected pair'], ['pockets', 'Pockets'], ['download', 'Download']]"
+            in js)
+    assert ('`<button type="button" role="tab" data-act="tab" data-v="${k}" aria-selected="${S.tab === k}">${l}'
+            "</button>`") in js
+
+
+def test_toast_hides_on_a_tap():
+    """A click or tap on the toast hides it at once (on a phone it covers the Download tab's Python lines) and stops
+    its timer; untouched it hides after 6 s. It is a role="status" element and never takes the focus."""
+    js = (VIEWER / "workspace.js").read_text(encoding="utf-8")
+    for part in ("toastTimer = setTimeout(hideToast, 6000);",
+                 "function hideToast() { clearTimeout(toastTimer); "
+                 "document.getElementById('pv-toast').hidden = true; }",
+                 # the click listener the saved image's close shares: a click outside the image still closes it
+                 "root.addEventListener('click', e => { if (e.target.id === 'pv-shot') closeShot(); "
+                 "else if (e.target.id === 'pv-toast') hideToast(); });",
+                 '<div class="pv-toast" id="pv-toast" role="status" hidden></div>'):
+        assert part in js, part
+    css = (VIEWER / "workspace.css").read_text(encoding="utf-8")
+    assert re.search(r"\.pv-toast \{[^}]*cursor: pointer; \}", css)
 
 
 def test_raw_text_check():

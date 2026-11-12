@@ -1,9 +1,9 @@
 """The PocketVina Atlas website's protein page for a results directory: ``Results.show()``, ``PocketVinaGPU.show()``
 and ``Selection.show()``.
 
-One self-contained HTML document: the 3D view of the Atlas site (its Mol* viewer, ``pocketvina/viewer/viewer.js``,
-in a frame of the page) with the controls around it (pocket chips, legend, protein style, Reset view, Save image)
-beside the tabs Top hits, Selected pair and Pockets, rebuilt in plain JavaScript (``pocketvina/viewer/workspace.js``).
+One self-contained HTML document: the 3D view of the Atlas site (its Mol* viewer, ``pocketvina/viewer/viewer.js``, in a
+frame of the page) with the controls around it (pocket chips, legend, protein style, Reset view, Save image) beside the
+tabs Top hits, Selected pair, Pockets and Download, rebuilt in plain JavaScript (``pocketvina/viewer/workspace.js``).
 Every pose the page can show is in it (the PDBQT output of every docked pocket of each listed ligand, its best pose as
 SDF), with the protein structures, the P2Rank pockets and a 2D drawing of each ligand, so it works offline, in a
 saved notebook and on Colab. The data (``workspace_data``) and the viewer's code are gzip-compressed and base64-encoded

@@ -351,7 +351,8 @@ class Selection:
     def show(self, path=None, *, molstar: str = "inline", theme: str = "auto", height: int = 760,
              max_ligands=_DEFAULT):
         """The PocketVina Atlas website's protein page for this pair's protein, with this pair selected: the 3D view
-        (pocket chips, modes, legend, contacts, Save image) beside the tabs Top hits, Selected pair and Pockets.
+        (pocket chips, modes, legend, contacts, Save image) beside the tabs Top hits, Selected pair, Pockets and
+        Download.
 
         In Jupyter, Colab or VSCode it is shown below the cell; elsewhere an HTML file is written (open it in a
         browser) and its path returned. Everything is in the page: it works offline and in a saved notebook.
