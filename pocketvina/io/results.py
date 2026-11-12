@@ -251,9 +251,9 @@ class Results:
     def show(self, protein=None, *, path=None, molstar: str = "inline", theme: str = "auto", height: int = 760,
              max_ligands: Optional[int] = 100):
         """The results as on the PocketVina Atlas website's protein page: the 3D view (pocket chips, modes, legend,
-        contacts, Save image) beside the tabs Top hits (pick a ligand there), Selected pair and Pockets, with a protein
-        menu when there are several proteins. In Jupyter, Colab or VSCode it is shown below the cell; elsewhere an
-        HTML file is written (open it in a browser) and its path returned.
+        contacts, Save image) beside the tabs Top hits (pick a ligand there), Selected pair, Pockets and Download, with
+        a protein menu when there are several proteins. In Jupyter, Colab or VSCode it is shown below the cell;
+        elsewhere an HTML file is written (open it in a browser) and its path returned.
 
         protein: a protein id, e.g. "1fbl", or a list of them; None (default): all proteins.
         path: write the page to this HTML file instead, e.g. "results.html"; returns the path.

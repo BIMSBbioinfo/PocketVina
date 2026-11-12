@@ -786,13 +786,39 @@ def overlap(a, b) -> bool:
 
 
 def test_bench_gpu(tmp_path, example_dir, fake_engine_env, stubs, monkeypatch):
-    """Each of the N processes docks the same ligands into the pocket at the same time; a warm-up call first."""
+    """Each of the N processes docks the same ligands into the pocket at the same time; a warm-up call first. No
+    timing margins: the 2 calls of the 2-process run end only once both have started
+    (``POCKETVINA_FAKE_ENGINE_WAIT_FOR``, set for them by a wrapper engine), so they overlap; run one after the other,
+    they would not (the first would end only after the 30 s fallback of the thread that writes "go", counted from
+    the first call's start, so a slow run before it does not use it up)."""
     monkeypatch.setenv("POCKETVINA_FAKE_ENGINE_SLEEP", "0.5")
+    gate = tmp_path / "engine_gate"
+    gate.mkdir()
+    engine = wrapper_engine(tmp_path, fake_engine_env, f"""if "procs2_" in env["POCKETVINA_ENGINE_SLOT"]:
+    env["POCKETVINA_FAKE_ENGINE_WAIT_FOR"] = {str(gate)!r}""")
+    monkeypatch.setenv("POCKETVINA_ENGINE", str(engine))
+
+    def release():  # "go" once both calls of the 2-process run have started (30 s after the first at most)
+        while not list(gate.glob("started-*")):
+            if done.wait(0.05):  # the benchmark ended before that run
+                return
+        deadline = time.monotonic() + 30
+        while len(list(gate.glob("started-*"))) < 2 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        (gate / "go").touch()
+
+    done = threading.Event()
+    releaser = threading.Thread(target=release, daemon=True)
+    releaser.start()
     smiles = bench_inputs(tmp_path, example_dir)
     out, tmp = tmp_path / "bench", tmp_path / "tmp"
-    result = ok(invoke("bench", "gpu", "--protein", FIXTURE_RECEPTOR, "--ligands", smiles, "--n-ligands", 3,
-                       "--procs", "1,2", "--pocket", 2, "--out", out, "--seed", 11, "--thread", 1000,
-                       "--tmp-dir", tmp))
+    try:
+        result = ok(invoke("bench", "gpu", "--protein", FIXTURE_RECEPTOR, "--ligands", smiles, "--n-ligands", 3,
+                           "--procs", "1,2", "--pocket", 2, "--out", out, "--seed", 11, "--thread", 1000,
+                           "--tmp-dir", tmp))
+    finally:
+        done.set()
+        releaser.join()
     assert "GPU: default (no nvidia-smi)" in result.stdout and "ligands_per_hour" in result.stdout
     lines = result.stdout.splitlines()
     head = next(n for n, line in enumerate(lines) if line.split()[:1] == ["procs"])
@@ -820,6 +846,9 @@ def test_bench_gpu(tmp_path, example_dir, fake_engine_env, stubs, monkeypatch):
         assert os.path.basename(o["receptor"]) == f"{PID}.pdbqt"
         assert c["env"]["POCKETVINA_ENGINE_SLOT"].startswith("bench")
     assert [len(c["outputs"]) for c in calls] == [1, 3, 3, 3]
+    # both calls of the 2-process run got "go" (none gave up waiting); the overlap check shows that both had started
+    # before either ended ("go" also comes after the releaser's 30 s fallback, so it alone does not)
+    assert [c.get("go") for c in calls] == [None, None, True, True]
     assert overlap(calls[2], calls[3]) and not overlap(calls[1], calls[2])
     assert os.listdir(tmp) == []
 
@@ -873,25 +902,39 @@ def test_bench_gpu_split_and_center(tmp_path, example_dir, fake_engine_env, monk
     assert [calls[0]["options"][f"center_{a}"] for a in "xyz"] == pytest.approx(pocket1_center())
 
 
-def fake_nvidia_smi(tmp_path, uuid) -> Path:
-    """An ``nvidia-smi`` reporting GPU ``uuid`` at 37 % and every process with POCKETVINA_ENGINE_SLOT in its
-    environment as a compute app using 1234 MiB on it."""
+def fake_nvidia_smi(tmp_path, uuid, gate) -> Path:
+    """An ``nvidia-smi`` reporting GPU ``uuid`` at 37 % and every process of this test (``$POCKETVINA_FAKE_ENGINE_LOG``
+    in its environment, so not the engines of other test sessions) with POCKETVINA_ENGINE_SLOT in its environment as
+    a compute app using 1234 MiB on it. ``gate`` holds a folder ``procs<n>`` per configuration of the benchmark: once
+    a sample has listed all its engines (``procs<n>_1`` to ``procs<n>_<n>``), the next run (the benchmark has read
+    that sample) writes ``go`` into it."""
     bin_dir = tmp_path / "smi_bin"
     bin_dir.mkdir()
     script = bin_dir / "fake_smi.py"
     script.write_text(f"""import os, sys
 args = " ".join(sys.argv[1:])
+gate = {str(gate)!r}
+for config in os.listdir(gate):
+    if os.path.exists(os.path.join(gate, config, "seen")):
+        open(os.path.join(gate, config, "go"), "w").close()
 if "--query-gpu=uuid,utilization.gpu,memory.used" in args:
     print("{uuid}, 37, 5000")
 elif "--query-compute-apps=gpu_uuid,pid,used_memory" in args:
+    test = ("POCKETVINA_FAKE_ENGINE_LOG=" + os.environ["POCKETVINA_FAKE_ENGINE_LOG"]).encode()
+    tags = set()
     for pid in filter(str.isdigit, os.listdir("/proc")):
         try:
             env = open(f"/proc/{{pid}}/environ", "rb").read().split(b"\\0")
         except OSError:
             continue
-        if any(v.startswith(b"POCKETVINA_ENGINE_SLOT=") for v in env):
+        slot = [v.decode() for v in env if v.startswith(b"POCKETVINA_ENGINE_SLOT=")]
+        if slot and test in env:
             print(f"{uuid}, {{pid}}, 1234")
+            tags.add(slot[0].rsplit("-", 1)[-1])
     print("GPU-someone-else, 1, 999")
+    for config in os.listdir(gate):
+        if all(f"{{config}}_{{p}}" in tags for p in range(1, int(config[len("procs"):]) + 1)):
+            open(os.path.join(gate, config, "seen"), "w").close()
 else:
     sys.exit(1)
 """)
@@ -905,22 +948,43 @@ else:
 
 @pytest.mark.skipif(not os.path.isdir("/proc"), reason="the benchmark finds its engines in /proc")
 def test_bench_gpu_samples_nvidia_smi(tmp_path, example_dir, fake_engine_env, monkeypatch):
+    """nvidia-smi is sampled while each configuration runs: the GPU's use and the memory of the benchmark's own
+    engines (not of another process with POCKETVINA_ENGINE_SLOT on the GPU). No timing margins: the engines of a
+    configuration end only once a sample has seen them all (``POCKETVINA_FAKE_ENGINE_WAIT_FOR``, see
+    ``fake_nvidia_smi``); without such a sample they give up waiting after 30 s and the test fails."""
     g = fake_gpus(2)[1]
     monkeypatch.setattr(gpu, "list_gpus", lambda: fake_gpus(2))
-    monkeypatch.setenv("PATH", f"{fake_nvidia_smi(tmp_path, g.uuid)}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.setenv("POCKETVINA_FAKE_ENGINE_SLEEP", "1.0")
-    smiles = bench_inputs(tmp_path, example_dir)
-    out = tmp_path / "bench"
-    result = ok(invoke("bench", "gpu", "--protein", FIXTURE_RECEPTOR, "--ligands", smiles, "--n-ligands", 2,
-                       "--procs", "1,2", "--center", 0, 0, 0, "--gpu", 1, "--sample-interval", 0.1, "--out", out,
-                       "--tmp-dir", tmp_path / "tmp"))
+    gate = tmp_path / "engine_gate"
+    for config in ("procs1", "procs2"):
+        (gate / config).mkdir(parents=True)
+    monkeypatch.setenv("PATH", f"{fake_nvidia_smi(tmp_path, g.uuid, gate)}{os.pathsep}{os.environ['PATH']}")
+    # the calls of a configuration wait in its gate folder; exec: one process per engine, as nvidia-smi lists them
+    engine = wrapper_engine(tmp_path, fake_engine_env, f"""tag = env["POCKETVINA_ENGINE_SLOT"].rsplit("-", 1)[1]
+if tag.startswith("procs"):
+    env["POCKETVINA_FAKE_ENGINE_WAIT_FOR"] = os.path.join({str(gate)!r}, tag.split("_")[0])
+os.execv({str(fake_engine_env)!r}, [{str(fake_engine_env)!r}] + argv)""")
+    monkeypatch.setenv("POCKETVINA_ENGINE", str(engine))
+    # an engine of another benchmark on the same GPU: listed by nvidia-smi, not counted
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                             env=dict(os.environ, POCKETVINA_ENGINE_SLOT="bench1-0123abcd-other"))
+    try:
+        smiles = bench_inputs(tmp_path, example_dir)
+        out = tmp_path / "bench"
+        result = ok(invoke("bench", "gpu", "--protein", FIXTURE_RECEPTOR, "--ligands", smiles, "--n-ligands", 2,
+                           "--procs", "1,2", "--center", 0, 0, 0, "--gpu", 1, "--sample-interval", 0.1, "--out", out,
+                           "--tmp-dir", tmp_path / "tmp"))
+    finally:
+        other.kill()
+        other.wait()
     assert f"GPU: 1 Tesla P40 ({g.uuid})" in result.stdout
     report = json.loads((out / cli.BENCH_JSON).read_text())
     assert report["gpu"]["uuid"] == g.uuid
     rows = report["configurations"]
     assert [r["peak_vram_mib"] for r in rows] == [1234, 1234] and [r["procs_seen"] for r in rows] == [1, 2]
     assert [r["gpu_util_mean"] for r in rows] == [37, 37] and [r["gpu_mem_used_max_mib"] for r in rows] == [5000] * 2
-    assert {c["env"]["CUDA_VISIBLE_DEVICES"] for c in fake_engine_env.calls()} == {g.uuid}
+    calls = fake_engine_env.calls()
+    assert {c["env"]["CUDA_VISIBLE_DEVICES"] for c in calls} == {g.uuid}
+    assert [c.get("go") for c in calls] == [None, True, True, True]  # the warm-up, then the configurations' calls
 
 
 def test_bench_gpu_failures(tmp_path, example_dir, fake_engine_env, monkeypatch):

@@ -301,41 +301,51 @@ def test_per_pocket_selection(imported, tmp_path):
 
 def test_slow_poses_are_retried_then_timeout_rows(imported, tmp_path, monkeypatch, forked, caplog):
     """A pose still running at the first timeout is checked again in a fresh worker with the next one, and is a
-    "timeout" row after the last; no pose is dropped and no worker is left behind."""
-    once = tmp_path / "slow_once"
+    "timeout" row after the last; no pose is dropped and no worker is left behind. No check races a limit: a slow
+    check sleeps 60 s, far longer than the limits, and a check that must finish gets 60 s; whether a worker is slow is
+    decided here before the pool starts it, in the order the pool starts them, not by a race between workers. Nor is
+    the time of the whole run asserted: a slow check that was not stopped leaves a file when its 60 s are over."""
+    mode, slow, start_worker = ["retried"], [], bust._Worker.__init__
+
+    def numbered_worker(self, *args, **kwargs):  # here, before the pool forks its next worker, which inherits the
+        # list (its own entry last): "retried": a run's first WORKERS workers (each pose's first check) are slow;
+        # "timeout": all are
+        slow.append(mode[0] == "timeout" or len(slow) < WORKERS)
+        start_worker(self, *args, **kwargs)
 
     def make(original):
         def check(*args, **kwargs):
-            name = kwargs["mol_pred"].GetProp("_Name")
-            if name == "molecule2":
-                time.sleep(60)  # always too slow
-            elif name == "molecule5":
-                try:
-                    os.close(os.open(once, os.O_CREAT | os.O_EXCL))
-                    time.sleep(60)  # too slow the first time only
-                except FileExistsError:
-                    pass
-            # 5 conformations instead of the config's 50, so that the retry of molecule5 fits its timeout on a
-            # 2-CPU machine (CI runners, laptops) too: with 50, its check takes 2 s on 16 CPUs, 6 s on 4, 10 s on 2
+            if slow[-1]:
+                time.sleep(60)
+                (tmp_path / f"not_stopped_{os.getpid()}").touch()
+            # 5 conformations instead of the config's 50: a quicker check (with 50: 10 s on 2 CPUs)
             return original(*args, **dict(kwargs, ensemble_number_conformations=5))
         return check
 
+    monkeypatch.setattr(bust._Worker, "__init__", numbered_worker)
     patch_check(monkeypatch, make)
-    path = copy_results(imported, tmp_path)
     caplog.set_level("INFO", logger="pocketvina.bust")
-    t0 = time.monotonic()
-    assert bust.bust_results(path, timeouts=(1.5, 8), workers=WORKERS, tmp_dir=str(tmp_path / "tmp")) == [PID]
-    assert time.monotonic() - t0 < 45  # the 60 s checks were stopped, not waited for
+    path = copy_results(imported, tmp_path / "retried")
+    assert bust.bust_results(path, timeouts=(1.5, 60), workers=WORKERS, tmp_dir=str(tmp_path / "tmp")) == [PID]
     with Results(path) as r:
         df = r.posebusters(PID).set_index("ligand_id")
-    assert df.pb_status.to_dict() == {"molecule2": "timeout", "molecule5": "valid", "molecule10": "no_pose"}
-    slow = df.loc["molecule2"]
-    assert pd.isna(slow.pb_valid) and slow.pb_mask == 0 and slow.pb_na_mask == ALL_BITS
-    assert "timed out" in slow.error and slow.runtime_s >= 9.5 and pd.isna(slow.n_heavy_docked)
-    assert df.loc["molecule5"].pb_valid
-    assert caplog.text.count("longer than 1.5 s, trying again with 8 s") == 2
+    assert df.pb_status.to_dict() == {"molecule2": "valid", "molecule5": "valid", "molecule10": "no_pose"}
+    assert caplog.text.count("longer than 1.5 s, trying again with 60 s") == 2
+    assert multiprocessing.active_children() == [] and not list(tmp_path.glob("not_stopped_*"))
+
+    mode[0] = "timeout"
+    path = copy_results(imported, tmp_path / "timeout")
+    assert bust.bust_results(path, timeouts=(1.5, 3), workers=WORKERS, tmp_dir=str(tmp_path / "tmp")) == [PID]
+    with Results(path) as r:
+        df = r.posebusters(PID).set_index("ligand_id")
+    assert df.pb_status.to_dict() == {"molecule2": "timeout", "molecule5": "timeout", "molecule10": "no_pose"}
+    for slow in (df.loc["molecule2"], df.loc["molecule5"]):
+        assert pd.isna(slow.pb_valid) and slow.pb_mask == 0 and slow.pb_na_mask == ALL_BITS
+        assert "timed out" in slow.error and slow.runtime_s >= 4.5 and pd.isna(slow.n_heavy_docked)
+    assert caplog.text.count("longer than 1.5 s, trying again with 3 s") == 2
     assert multiprocessing.active_children() == []
     assert os.listdir(tmp_path / "tmp") == []
+    assert not list(tmp_path.glob("not_stopped_*"))  # the slow checks were stopped, not waited for
 
 
 def test_dead_worker_gives_error_rows(imported, tmp_path, monkeypatch, forked):

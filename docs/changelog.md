@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.2
+
+### Changed
+
+- The hint after a download in the page of `show()` says "If nothing was downloaded, downloads are blocked here: use
+  the Python lines in the Download tab." Those lines select the pair shown and save it, e.g.
+  `pair = pocketvina.select(protein="1fbl", ligand="molecule1")` and `pair.export(protein=True)` (`atlas.select` on
+  a page of the PocketVina Atlas). The hint said "Nothing downloaded? Downloads are blocked here: in Python,
+  pair.export() ...", also where the download worked (e.g. in a website's frame) and on pages with no `pair` in
+  Python; the Download tab said only "In Python: pair.export() and pair.export(protein=True)."
+- The hint after a download is up to 90% of the window wide, at most 640 px, and a click or tap hides it. It was at
+  most half the window wide, so on a phone it took up to 9 lines. The Download tab's Python lines do not wrap: a line
+  too long for its box scrolls sideways. A copy button next to "In Python:" copies both lines.
+- The tabs of the page wrap to a second row where the side panel is too narrow for them, e.g. in a window 320 px or
+  900 px wide. They made the page wider than the window.
+
 ## 0.3.1
 
 ### Added

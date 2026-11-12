@@ -450,18 +450,29 @@ def test_protein_is_committed_while_the_next_one_converts_its_receptor(tmp_path,
                                                                      use_gpus, monkeypatch):
     """OpenBabel holds the GIL while it converts a receptor (seconds to tens of seconds): for the protein prepared
     while engine calls are due it runs in a child process, so the current protein's last call is recorded and the
-    protein committed at once, not when the next protein's calls start."""
+    protein committed at once, not when the next protein's calls start. No timing margins: the current protein's
+    calls end only once the conversion runs (``POCKETVINA_FAKE_ENGINE_WAIT_FOR``), and the conversion ends only once
+    the current protein is committed; if the commit waited for the conversion, the conversion gives up waiting after
+    30 s and ends first, and the test fails."""
     big = crop_pdb(example_dir / "proteins" / "1fbl.pdb", tmp_path / "big.pdb", n_atoms=1200)  # not stubbed
     plist, smiles = make_inputs(tmp_path, example_dir, ligands=("molecule1",), proteins=[FIXTURE_RECEPTOR, big])
     out = tmp_path / "results"
     use_gpus(fake_gpus(1))
     monkeypatch.setattr(pipeline, "predict_pockets", stub_predict_pockets())
-    monkeypatch.setenv("POCKETVINA_FAKE_ENGINE_SLEEP", "0.3")
-    commit, committed = ResultsDir.commit, {}
+    gate = tmp_path / "engine_gate"  # the engine calls write started-<pid> here and wait for the file "go"
+    gate.mkdir()
+    monkeypatch.setenv("POCKETVINA_FAKE_ENGINE_WAIT_FOR", str(gate))
+    cache = Path(os.environ["POCKETVINA_KERNEL_CACHE"])
+    cache.mkdir(parents=True)
+    for name in engine.KERNEL_FILES:  # no kernel build call
+        (cache / name).write_bytes(b"kernel")
+    commit, committed, committed_file = ResultsDir.commit, {}, tmp_path / "committed"
 
     def timed_commit(self, pid, *a, **kw):
         commit(self, pid, *a, **kw)
         committed[pid] = time.time()
+        if pid == FIXTURE_ID:
+            committed_file.touch()
 
     monkeypatch.setattr(ResultsDir, "commit", timed_commit)
     communicate, converted = pipeline._communicate, {}
@@ -472,18 +483,26 @@ def test_protein_is_committed_while_the_next_one_converts_its_receptor(tmp_path,
         return stdout
 
     monkeypatch.setattr(pipeline, "_communicate", timed_communicate)
-    # a conversion that outlasts the fixture's engine calls on any machine (on a fast one it may take less than
-    # 0.5 s, and end before them), polled often
-    monkeypatch.setattr(pipeline, "_RECEPTOR_CODE", "import time\ntime.sleep(3)\n" + pipeline._RECEPTOR_CODE)
+    # the conversion (child process) first lets the current protein's calls end, then waits until that protein is
+    # committed (30 s at most; "saw_committed" if it was), then converts; polled often
+    monkeypatch.setattr(pipeline, "_RECEPTOR_CODE",
+                        f"import os, time\nopen({str(gate / 'go')!r}, 'w').close()\n"
+                        f"deadline = time.monotonic() + 30\n"
+                        f"while not os.path.exists({str(committed_file)!r}) and time.monotonic() < deadline:\n"
+                        f"    time.sleep(0.05)\n"
+                        f"if os.path.exists({str(committed_file)!r}):\n"
+                        f"    open({str(tmp_path / 'saw_committed')!r}, 'w').close()\n" + pipeline._RECEPTOR_CODE)
     monkeypatch.setattr(pipeline, "P2RANK_POLL_S", 0.05)
-    run(plist, smiles, out, tmp_path)
+    run(plist, smiles, out, tmp_path, procs_per_gpu=2)  # 2 slots, 2 pockets per protein: both calls run at once
     calls = fake_engine_env.calls()
+    first = [c for c in calls if c["options"]["receptor"].endswith(f"/{FIXTURE_ID}.pdbqt")]
     first_call_of_big = min(c["start"] for c in calls if c["options"]["receptor"].endswith("/big.pdbqt"))
-    last_call_of_fixture = max(c["end"] for c in calls if c["options"]["receptor"].endswith(f"/{FIXTURE_ID}.pdbqt"))
-    assert committed[FIXTURE_ID] - last_call_of_fixture < 2.0
-    # committed while big's receptor was still converting (in the child process), so before big's calls started;
-    # not a fixed margin: how long the conversion takes depends on the machine
-    assert set(converted) == {"big"}
+    # the current protein's calls got "go" (none gave up waiting): they were under way while big's receptor converted
+    assert len(first) == 2 and [c["go"] for c in first] == [True, True], first
+    # committed while big's receptor was still converting: the child process saw it before it converted (not only
+    # committed < converted, taken once _communicate is back: a pipeline that waits for the child, then records the
+    # calls before it returns, passes that), so before big's calls started: order, not margins
+    assert set(converted) == {"big"} and (tmp_path / "saw_committed").exists()
     assert committed[FIXTURE_ID] < converted["big"] <= first_call_of_big, (committed, converted, first_call_of_big)
     assert set(committed) == {FIXTURE_ID, "big"}  # the receptor bytes: test_receptor_pdbqt_in_a_child_process
 
@@ -492,18 +511,27 @@ def test_next_protein_is_prepared_while_the_slots_dock_all_calls_of_the_first(tm
                                                                               use_gpus, monkeypatch):
     """As many slots as the first protein has calls: once the slots have taken them, none is queued, so the next
     protein is prepared while they dock (its P2Rank run starts before the first call is back), not after it, when
-    every slot would wait for it."""
+    every slot would wait for it. No timing margins: the engine calls end only when the next protein's P2Rank run
+    lets them, once both are running (``POCKETVINA_FAKE_ENGINE_WAIT_FOR``); if that run started only after a call
+    was back, the calls give up waiting after ``fake_engine.WAIT_FOR_S`` seconds and the test fails."""
     plist, smiles = two_proteins(tmp_path, example_dir, ligands=("molecule1",))
     use_gpus(fake_gpus(1))
     monkeypatch.setattr(pipeline, "receptor_pdbqt", cropped_receptor())
     write_pockets, p2rank_started = stub_predict_pockets(), {}
+    gate = tmp_path / "engine_gate"  # the engine calls write started-<pid> here and wait for the file "go"
+    gate.mkdir()
+    monkeypatch.setenv("POCKETVINA_FAKE_ENGINE_WAIT_FOR", str(gate))
 
     def predict_pockets(structure, work_dir, p2rank_config=None, *, while_running=None):
         p2rank_started[os.path.basename(structure)] = time.time()
+        if os.path.basename(structure) == "1fbl.pdb":  # the next protein: let the first one's calls end
+            deadline = time.monotonic() + 30
+            while len(list(gate.glob("started-*"))) < 2 and time.monotonic() < deadline:  # both calls running
+                time.sleep(0.05)
+            (gate / "go").touch()
         return write_pockets(structure, work_dir, p2rank_config)
 
     monkeypatch.setattr(pipeline, "predict_pockets", predict_pockets)
-    monkeypatch.setenv("POCKETVINA_FAKE_ENGINE_SLEEP", "2.5")
     cache = Path(os.environ["POCKETVINA_KERNEL_CACHE"])
     cache.mkdir(parents=True)
     for name in engine.KERNEL_FILES:  # no kernel build call
@@ -511,8 +539,10 @@ def test_next_protein_is_prepared_while_the_slots_dock_all_calls_of_the_first(tm
     run(plist, smiles, tmp_path / "results", tmp_path, procs_per_gpu=2)  # 2 slots, 2 pockets per protein
     calls = fake_engine_env.calls()
     first = [c for c in calls if c["options"]["receptor"].endswith(f"/{FIXTURE_ID}.pdbqt")]
-    assert len(first) == 2 and max_overlap(first) == 2
-    assert p2rank_started["1fbl.pdb"] < min(c["end"] for c in first) - 0.5, (p2rank_started, first)
+    # both calls got "go" (none gave up waiting), so they ended after the next protein's P2Rank run started and
+    # were both running then: order, not margins
+    assert len(first) == 2 and [c["go"] for c in first] == [True, True], first
+    assert max_overlap(first) == 2 and p2rank_started["1fbl.pdb"] < min(c["end"] for c in first)
     assert ResultsDir(tmp_path / "results").done_proteins() == {FIXTURE_ID, "1fbl"}
 
 

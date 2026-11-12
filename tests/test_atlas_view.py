@@ -364,6 +364,28 @@ def test_pair_show_entry_run(atlas, atlas_dir, tmp_path):
     assert entry["rank"] is None and entry["across"] is None
 
 
+def test_download_tab_python_lines(atlas, tmp_path):
+    """The Python lines of an Atlas page's Download tab (workspace.js pythonLines) name the protein by its gene
+    (P.info.title) and the drug as the page names it (L.id): atlas.select takes both and selects the pair shown, for
+    every Top hit of each protein and for a row listed after them (not docked as a drug). A title of several genes
+    ("A; B") is not taken: there the lines name the protein's id (workspace.js pyProtein)."""
+    pages = [atlas._page(protein, None) for protein in (ABL1, EGFR, PTGS2)]
+    pages.append(payload(atlas.select(*OTHER).show(path=tmp_path / "other.html", max_ligands=1)))
+    n = 0
+    for data in pages:
+        (prot,) = data["proteins"]
+        assert prot["info"]["title"] != prot["id"]  # the gene, not the accession
+        for item in prot["rows"]:
+            ligand = data["ligands"][str(item["lig"])]
+            assert ligand["id"] != ligand["name"]  # the drug's name, not its PVL ID
+            sel = atlas.select(protein=prot["info"]["title"], ligand=ligand["id"])
+            assert (sel.protein, sel.ligand_idx) == (prot["id"], item["lig"])
+            n += 1
+    assert n > len(pages)
+    with pytest.raises(KeyError, match="no protein"):
+        atlas.select(protein=f"{prot['info']['title']}; X1", ligand=ligand["id"])
+
+
 def test_across_proteins():
     """The rank of the protein among the drug's best targets (compounds/<PVL>.json), as the site's pair panel says it:
     [rank, number of docked proteins]; outside them [None, number, number of best targets]."""

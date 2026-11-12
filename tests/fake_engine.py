@@ -21,6 +21,10 @@ Test hooks (environment):
   POCKETVINA_FAKE_ENGINE_LOG    append one JSON line per call (argv, cwd, options, some env vars, outputs, exit code,
                                 start and end time as ``time.time()``)
   POCKETVINA_FAKE_ENGINE_SLEEP  seconds to sleep before docking (for timeout tests)
+  POCKETVINA_FAKE_ENGINE_WAIT_FOR  a folder: before docking, the call writes ``started-<pid>`` into it and waits until
+                                a file ``go`` is there, so a test decides when calls end, without timing margins; after
+                                ``WAIT_FOR_S`` seconds without ``go`` it docks anyway, so a test fails instead of
+                                hanging. Its log line then has ``"go": true`` (``false``: it gave up waiting)
   POCKETVINA_FAKE_ENGINE_SHARED_RNG  "1": as in the real engine, whose ligands of one call share one random number
                                 generator, a ligand's scores also depend on its position among the call's valid
                                 ligands (``score_modes(..., position=)``), so ligand order and chunking matter
@@ -48,6 +52,7 @@ FAIL_MARKER = "FAIL"
 LOGGED_ENV = ("POCKETVINA_KERNEL_SRC", "POCKETVINA_KERNEL_CACHE", "OPENCL_ROOT", "LD_LIBRARY_PATH",
               "CUDA_VISIBLE_DEVICES", "POCKETVINA_DIE_WITH_PARENT", "POCKETVINA_ENGINE_SLOT")
 USAGE = "Usage: PocketVina-GPU --config <file> [--<option> <value> ...]"
+WAIT_FOR_S = 30  # POCKETVINA_FAKE_ENGINE_WAIT_FOR: how long a call waits for "go"
 
 
 class UsageError(Exception):
@@ -280,6 +285,22 @@ def render_json(key, modes, pocket):
     return json.dumps({key: rows}, indent=4, sort_keys=True, ensure_ascii=False)
 
 
+def wait_for_go(folder):
+    """POCKETVINA_FAKE_ENGINE_WAIT_FOR: write ``<folder>/started-<pid>``, then wait for ``<folder>/go``.
+
+    True when ``go`` came, False when it did not within ``WAIT_FOR_S`` seconds.
+    """
+    with open(os.path.join(folder, f"started-{os.getpid()}"), "w"):
+        pass
+    go = os.path.join(folder, "go")
+    deadline = time.monotonic() + WAIT_FOR_S
+    while not os.path.exists(go):
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.05)
+    return True
+
+
 def dock(opts, say, warn):
     """Write the outputs; returns (exit code, written pdbqt paths, failed ligand paths)."""
     receptor, pocket = opts["receptor"], opts["pocket_rank"]
@@ -353,7 +374,7 @@ def dock(opts, say, warn):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
-    lines, opts, written, failed, code = [], {}, [], [], 1
+    lines, opts, written, failed, code, go = [], {}, [], [], 1, None
     t0 = time.time()
 
     def say(msg):
@@ -378,6 +399,8 @@ def main(argv=None):
         delay = float(os.environ.get("POCKETVINA_FAKE_ENGINE_SLEEP") or 0)
         if delay > 0:
             time.sleep(delay)
+        if os.environ.get("POCKETVINA_FAKE_ENGINE_WAIT_FOR"):
+            go = wait_for_go(os.environ["POCKETVINA_FAKE_ENGINE_WAIT_FOR"])
         code, written, failed = dock(opts, say, warn)
         say(f"QuickVina 2-GPU3 total runtime = {time.time() - t0:.3f} s")
         if opts.get("log"):
@@ -394,6 +417,8 @@ def main(argv=None):
             entry = {"argv": argv, "cwd": os.getcwd(), "options": opts, "outputs": written, "failed": failed,
                      "returncode": code, "env": {k: os.environ.get(k) for k in LOGGED_ENV}, "start": t0,
                      "end": time.time()}
+            if go is not None:
+                entry["go"] = go
             # one write() on an O_APPEND fd, so lines from concurrent engine calls never interleave
             fd = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
             try:

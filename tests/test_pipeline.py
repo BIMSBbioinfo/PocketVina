@@ -1539,32 +1539,41 @@ def test_receptor_pdbqt_in_a_child_process(tmp_path, example_dir, monkeypatch, c
     """While engine calls are due (``while_running``), OpenBabel, which holds the GIL, converts the receptor in a
     child process: the same bytes, ``while_running`` is called meanwhile and other threads keep running. Its errors
     are raised as in this process; if ``while_running`` raises, the child is killed; a child that cannot run, a
-    PDBQT input or no ``while_running`` convert in this process."""
+    PDBQT input or no ``while_running`` convert in this process. No timing margins: the child ends only once another
+    thread of this process has taken 20 steps while it ran and ``while_running`` was called (the file "go"); if this
+    process were blocked meanwhile (OpenBabel holding its GIL), the child gives up waiting after 30 s, no "saw_go"."""
     pdb = crop_pdb(example_dir / "proteins" / "1fbl.pdb", tmp_path / "r.pdb", n_atoms=600)
     expected = pipeline.receptor_pdbqt(pdb).encode("utf-8")
-    ticks, stop = [], threading.Event()
+    gate, code = tmp_path / "gate", pipeline._RECEPTOR_CODE
+    gate.mkdir()
+    monkeypatch.setattr(pipeline, "_RECEPTOR_CODE",
+                        f"open({str(gate / 'started')!r}, 'w').close()\n{code}import os, time\n"
+                        f"deadline = time.monotonic() + 30\n"
+                        f"while not os.path.exists({str(gate / 'go')!r}) and time.monotonic() < deadline:\n"
+                        f"    time.sleep(0.01)\n"
+                        f"if os.path.exists({str(gate / 'go')!r}):\n"
+                        f"    open({str(gate / 'saw_go')!r}, 'w').close()\n")
+    steps, polls, stop = [], [], threading.Event()
 
-    def tick():
-        while not stop.is_set():
-            ticks.append(time.monotonic())
+    def tick():  # another thread: 20 steps while the child runs, then "go" (once while_running was called too)
+        while not stop.is_set() and (len(steps) < 20 or not polls):
+            if (gate / "started").exists():
+                steps.append(1)
             time.sleep(0.01)
+        (gate / "go").touch()
 
     ticker = threading.Thread(target=tick, daemon=True)
     ticker.start()
-    polls = []
-    # polled often enough to be called during the conversion also on a fast machine (it may take less than 0.5 s)
-    monkeypatch.setattr(pipeline, "P2RANK_POLL_S", 0.05)
+    monkeypatch.setattr(pipeline, "P2RANK_POLL_S", 0.05)  # polled often: the test is quick
     try:
-        t0 = time.monotonic()
         got = pipeline._receptor_pdbqt(str(pdb), str(tmp_path / "child.pdbqt"), lambda: polls.append(1))
-        t1 = time.monotonic()
     finally:
         stop.set()
         ticker.join()
+    monkeypatch.setattr(pipeline, "_RECEPTOR_CODE", code)
     assert got == expected and (tmp_path / "child.pdbqt").read_bytes() == expected
     assert polls and "converting it here" not in caplog.text
-    during = [t0] + [t for t in ticks if t0 <= t <= t1] + [t1]
-    assert max(b - a for a, b in zip(during, during[1:])) < 0.5  # the GIL was not held
+    assert (gate / "saw_go").exists() and len(steps) >= 20  # this process ran on while the child ran: no GIL held
 
     empty = tmp_path / "water.pdb"
     empty.write_text("HETATM 9999  O   HOH A 999      1.000   1.000   1.000  1.00  0.00           O\n")
