@@ -65,7 +65,8 @@ html_theme_options = {
     "source_directory": "docs/",
 }
 # the example 3D pages of visualisation.md (written by show() for the quick start run) and of atlas.md (by
-# docs/atlas_outputs.py, from the public Atlas), and the style of output blocks (pocketvina.css)
+# docs/atlas_outputs.py, from the public Atlas), the figure of index.md and its font (fonts/, with its licence), and
+# the style of output blocks and of that figure (pocketvina.css)
 html_static_path = ["_static"]
 html_css_files = ["pocketvina.css"]
 pygments_style = "github-light"  # code blocks in GitHub's colours, as on the PocketVina Atlas website

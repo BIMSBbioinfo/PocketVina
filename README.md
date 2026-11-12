@@ -31,7 +31,11 @@
 </p>
 
 <p align="center">
-  <img src="doc/assets/pocketvina.gif" width="98%" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/BIMSBbioinfo/PocketVina/main/doc/assets/pocketvina_figure_dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/BIMSBbioinfo/PocketVina/main/doc/assets/pocketvina_figure_light.svg" />
+    <img src="https://raw.githubusercontent.com/BIMSBbioinfo/PocketVina/main/doc/assets/pocketvina_figure.png" alt="PocketVina: P2Rank finds the pockets, then each ligand is docked into several of them on the GPU" width="98%" />
+  </picture>
 </p>
 
 PocketVina finds the pockets of each protein with P2Rank and docks every ligand into the best pockets on the GPU.

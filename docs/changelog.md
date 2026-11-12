@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.3
+
+### Changed
+
+- The figure on the [first page](index.md) of this documentation and in the README is readable in a dark theme too.
+  On the first page its words can be selected.
+
+### Fixed
+
+- In the page of `show()`, after a click into the Download tab's Python lines, the arrow keys scroll them. They
+  stepped through the modes and switched to the Selected pair tab.
+
 ## 0.3.2
 
 ### Changed
