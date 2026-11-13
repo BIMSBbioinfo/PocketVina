@@ -9,8 +9,9 @@ and ``procs_per_gpu``, see ``pocketvina.gpu`` and ``plan_engine_slots``) and in 
 prepares the next protein while the slots dock, so the GPUs do not wait at protein boundaries, and records the engine
 outputs in the protein's ``ProteinWriter`` as they come back, also while P2Rank and the OpenBabel receptor conversion
 (then in a child process: it holds the GIL) run for the next protein (the output files are deleted).
-Once all calls of a protein are back, its pose file, Parquet parts and gzipped input structure are committed to the
-results directory with ``manifest/<protein_id>.json`` last. A call docks the same ligands with the same settings
+Once all calls of a protein are back, its pose file, Parquet parts, gzipped input structure and P2Rank's SAS points
+(``io.sas``; not for pockets read from a CSV) are committed to the results directory with ``manifest/<protein_id>.json``
+last. A call docks the same ligands with the same settings
 whatever slot runs it, so the results do not depend on the number of slots. Proteins with a manifest are skipped, so a
 stopped run resumes where it was, and several processes may write different proteins into one results directory.
 """
@@ -33,6 +34,7 @@ import subprocess
 import sys
 import threading
 import time
+import zlib
 from collections import Counter, defaultdict
 from typing import Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
@@ -52,7 +54,7 @@ from .engine import (
     running_engines,
     write_config,
 )
-from .io import posefile, tables
+from .io import posefile, sas, tables
 from .io.writer import MAX_POCKET, ProteinWriter, ResultsDir, protein_id_from_path, resolve_tmp_dir
 from .ligands import LigandRecord, prepare_ligands, read_smiles_file, write_ligand_dir
 from .main import (  # receptor_pdbqt is in main.py so that the "files" format needs no pyarrow
@@ -217,7 +219,8 @@ def predict_pockets(structure, work_dir, p2rank_config: Optional[P2RankConfig] =
                     while_running: Optional[Callable[[], None]] = None) -> str:
     """Run P2Rank on ``structure`` with ``work_dir`` as its working and output folder; returns the predictions CSV.
 
-    Uses ``threads`` and ``model`` of ``p2rank_config`` (never writes visualizations). ``while_running`` is called
+    Uses ``threads`` and ``model`` of ``p2rank_config``. P2Rank also writes its visualizations there, for their SAS
+    points file (``io.sas.points_file``), without a copy of the protein. ``while_running`` is called
     every ``P2RANK_POLL_S`` seconds while P2Rank runs (``run_atlas`` records the engine calls that are back meanwhile);
     if it raises, or the wait is interrupted, P2Rank is killed (with its Java process). P2Rank is the one of
     ``p2rank.ensure_p2rank()``, downloaded into the user cache first if there is none. ``RunAborted`` if P2Rank or
@@ -237,7 +240,7 @@ def predict_pockets(structure, work_dir, p2rank_config: Optional[P2RankConfig] =
         prank = p2rank.ensure_p2rank()
     except p2rank.P2RankError as e:
         raise RunAborted(str(e)) from e
-    cmd = [prank, "predict", "-f", source, "-o", out_dir, "-visualizations", "false", "-threads", str(cfg.threads),
+    cmd = [prank, "predict", "-f", source, "-o", out_dir, "-visualizations", "true", "-threads", str(cfg.threads),
            "-vis_copy_proteins", "false", "-model", cfg.model]
     try:
         # a session of its own (POSIX): the prank launcher runs Java as a child, which a stop must kill too
@@ -978,6 +981,40 @@ def _stage_structure(source: str, protein_id: str, stage: str, gzip_level: int) 
     return rel, dst
 
 
+_no_points_logged = False  # "P2Rank wrote no SAS points file" is logged once (_stage_sas)
+
+
+def _stage_sas(predictions_csv: str, protein_id: str, docked: Sequence[int], stage: str,
+               gzip_level: int) -> Optional[Tuple[str, str]]:
+    """P2Rank's SAS points of the protein (its points file next to ``predictions_csv``) as ``sas/<protein_id>.json.gz``
+    (``io.sas``, the docked pockets' points in "pockets"): (path in results, temp path); None if P2Rank wrote no
+    points file (a warning, once), or it cannot be read or has no points (a warning: the protein is docked all the
+    same)."""
+    global _no_points_logged
+    path = sas.points_file(predictions_csv)
+    if path is None:
+        if not _no_points_logged:
+            _no_points_logged = True
+            logger.warning("%s: P2Rank wrote no SAS points file (visualizations/data/*_points.pdb.gz next to %s), so "
+                           "the results keep no SAS points for it (said once: other proteins may have none either)",
+                           protein_id, os.path.basename(predictions_csv))
+        return None
+    try:
+        points = sas.read_points(path)
+    except (OSError, ValueError, EOFError, zlib.error) as e:
+        logger.warning("%s: P2Rank's SAS points %s cannot be read, none are kept: %s", protein_id, path, e)
+        return None
+    if not points:
+        logger.warning("%s: P2Rank's SAS points file %s has no points, none are kept", protein_id, path)
+        return None
+    rel = f"sas/{protein_id}.json.gz"
+    dst = os.path.join(stage, *rel.split("/"))
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    with open(dst, "wb") as f:
+        f.write(sas.encode(sas.build(points, docked, protein_id), gzip_level))
+    return rel, dst
+
+
 @dataclasses.dataclass
 class _ProteinJob:
     """A protein whose engine calls are under way (main thread only)."""
@@ -1003,6 +1040,7 @@ class _ProteinJob:
     receptor_s: float = 0.0     # how long the receptor PDBQT took
     t_docking: float = 0.0      # time.monotonic() when its engine calls were queued
     memory: Optional[dict] = None  # peak memory while it docked (gpu.MemorySampler record)
+    sas: Optional[Tuple[str, str]] = None  # P2Rank's SAS points (path in results, staged temp path); None: none
 
     def cleanup(self):
         self.writer.cleanup()
@@ -1047,6 +1085,9 @@ def _prepare_protein(pv: PocketVinaGPU, n: int, prot: ProteinInput, lig: _Ligand
     K = top if top is not None else max(ranks) if ranks else max((p.rank for p in docked), default=0)
 
     structure = _stage_structure(prot.source_path, pid, os.path.join(work, "stage"), cfg.gzip_level)
+    # pockets of a CSV (given, or the database's) come without points
+    sas_file = None if prot.pockets_csv else _stage_sas(pockets_csv, pid, [p.rank for p in docked],
+                                                        os.path.join(work, "stage"), cfg.gzip_level)
     meta = dict(params=params, source=os.path.basename(prot.source_path), structure_file=structure[0],
                 receptor_sha256=receptor_sha256.hex(), ligands_sha256=ligands_sha256)
     writer = ProteinWriter(pid, lig.n, [p.rank for p in docked], K, work, meta, uniprot=prot.uniprot,
@@ -1061,7 +1102,8 @@ def _prepare_protein(pv: PocketVinaGPU, n: int, prot: ProteinInput, lig: _Ligand
     calls = [_Call(pid, receptor, pocket, batch_no, lig_dir, stems)
              for pocket in docked for batch_no, (lig_dir, stems) in enumerate(batches, 1)]
     return _ProteinJob(n, prot, work, writer, pockets, docked, notes, receptor_sha256, structure, calls, t0,
-                       pending=len(calls), p2rank_s=p2rank_s, receptor_s=receptor_s, t_docking=time.monotonic())
+                       pending=len(calls), p2rank_s=p2rank_s, receptor_s=receptor_s, t_docking=time.monotonic(),
+                       sas=sas_file)
 
 
 def _finish_protein(pv: PocketVinaGPU, rd: ResultsDir, job: _ProteinJob, lig: _Ligands) -> dict:
@@ -1080,6 +1122,8 @@ def _finish_protein(pv: PocketVinaGPU, rd: ResultsDir, job: _ProteinJob, lig: _L
     stage = os.path.join(job.work, "stage")
     staged = job.writer.finalize(lambda i, k, model: _pose_sdf(lig, pid, i, k, model))
     staged[structure_rel] = structure_tmp
+    if job.sas is not None:
+        staged[job.sas[0]] = job.sas[1]
     status = "ok" if job.docked else "no_pockets"
     protein_row = dict(protein_id=pid, uniprot=job.prot.uniprot, source_path=job.prot.source_path,
                        structure_file=structure_rel, receptor_sha256=job.receptor_sha256,

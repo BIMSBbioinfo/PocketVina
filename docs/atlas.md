@@ -314,7 +314,7 @@ pocketvina atlas download ABL1 EGFR --out my_atlas
 ```{code-block} text
 :class: pv-output
 
-PocketVina Atlas v1.1: 2,772 files, 294.7 MB, for 2 proteins into /path/to/my_atlas
+PocketVina Atlas v1.1: 2,774 files, 295.0 MB, for 2 proteins into /path/to/my_atlas
 /path/to/my_atlas
 ```
 
@@ -334,7 +334,7 @@ atlas.download(proteins=["ABL1", "EGFR"], out="my_atlas")
 ```{code-block} text
 :class: pv-output
 
-PocketVina Atlas v1.1: 2,772 files, 294.7 MB, for 2 proteins into /path/to/my_atlas
+PocketVina Atlas v1.1: 2,774 files, 295.0 MB, for 2 proteins into /path/to/my_atlas
 '/path/to/my_atlas'
 ```
 
@@ -359,7 +359,8 @@ offline.best_scores(protein="ABL1", top=5)
 ```
 
 - A download that stopped goes on where it stopped when you run it again.
-- The files are checked against the release's MANIFEST.json (size and sha256; the few files it does not list, by size).
+- The files are checked against the release's MANIFEST.json (size and sha256; the few files it does not list, by size,
+  and P2Rank's SAS points against sas/MANIFEST.json).
 - In the folder, `search` and `best_scores(ligand=...)` list only its proteins.
 
 To read the folder by default, set `POCKETVINA_ATLAS` to its full path, for example

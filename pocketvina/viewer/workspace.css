@@ -60,9 +60,12 @@ p { margin: 0; }
 .pv-viewer iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
 .pv-viewer iframe.pv-hidden { visibility: hidden; }
 .pv-status { position: absolute; left: 12px; top: 8px; font-size: 13px; color: var(--mut); pointer-events: none; z-index: 5; }
-.pv-overlay { position: absolute; left: 8px; right: 8px; bottom: 8px; top: 8px; z-index: 10; display: flex; flex-direction: column-reverse;
-  align-items: flex-start; gap: 8px; pointer-events: none; }
-.pv-legend { pointer-events: auto; max-height: 35%; max-width: min(70%, 420px); overflow-y: auto; border: 1px solid var(--line); border-radius: 2px;
+/* the legend and, under it at the very bottom, the bar (Viewer.tsx, the site's round 14t): a bottom-aligned column, so a legend that
+   grows or shrinks never moves the bar; each in a slot of its own (display: contents: the column holds the legend and the bar) */
+.pv-overlay { position: absolute; left: 8px; right: 8px; bottom: 8px; top: 8px; z-index: 10; display: flex; flex-direction: column;
+  justify-content: flex-end; align-items: flex-start; gap: 8px; pointer-events: none; container-type: inline-size; }
+.pv-slot { display: contents; }
+.pv-legend { pointer-events: auto; max-height: 35%; max-width: min(70%, 480px); overflow-y: auto; border: 1px solid var(--line); border-radius: 2px;
   background: var(--bg); font-size: 13px; }
 .pv-legend summary { display: flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 8px; color: var(--mut); }
 .pv-legend summary:hover { color: var(--fg); }
@@ -78,9 +81,34 @@ p { margin: 0; }
 .pv-sw-pk { display: inline-block; width: 6px; height: 10px; opacity: .5; }
 .pv-dash { display: inline-block; width: 16px; border-top: 2px dashed; }
 .pv-types button[aria-pressed=false] .pv-dash { opacity: .3; }
-.pv-styles { pointer-events: auto; display: flex; gap: 4px; }
-.pv-styles .tag { background: var(--bg); }
-.pv-styles .tag[aria-pressed=true] { background: var(--sec); }
+/* a narrow view (a phone, or a window of 801 to about 1100 px): the interactions under the colours, as on the site's phones */
+@container (max-width: 680px) {
+  .pv-legend { max-width: 100%; }
+  .pv-legend-body { flex-direction: column; gap: 4px; }
+  .pv-legend .pv-types { border-left: 0; padding-left: 0; border-top: 1px solid var(--line); padding-top: 4px; }
+}
+.pv-sw-sas { display: inline-flex; gap: 1px; }
+.pv-sw-sas i { display: inline-block; width: 6px; height: 6px; }
+/* the bar: Protein (an eye), the protein's style (a menu that opens upwards), Ligand (an eye); in the legend's style */
+.pv-bar { pointer-events: auto; flex: none; display: flex; align-items: stretch; min-height: 28px; max-width: 100%; border: 1px solid var(--line);
+  border-radius: 2px; background: var(--bg); font-size: 13px; }
+.pv-bar > button, .pv-menu > summary { display: flex; align-items: center; gap: 6px; white-space: nowrap; background: none; border: 0; padding: 0 4px 0 8px;
+  cursor: pointer; }
+.pv-bar > button:last-child { padding-right: 8px; }
+.pv-bar > button:hover, .pv-menu > summary:hover, .pv-menu-list button:hover { background: var(--sec); }
+.pv-bar > button svg { color: var(--mut); flex: none; }
+.pv-bar > button[aria-pressed=false] { color: var(--mut); }
+.pv-menu { position: relative; display: flex; }
+.pv-menu > summary { gap: 2px; padding: 0 6px; color: var(--mut); }
+.pv-menu > summary[data-dim] { opacity: .6; }  /* the protein hidden: only the label is dimmed, not the open list */
+.pv-menu[open] .pv-chev { transform: rotate(180deg); }
+.pv-menu .pv-chev { display: inline-flex; }
+.pv-menu-list { position: absolute; left: 0; bottom: calc(100% + 4px); z-index: 1; min-width: 100%; padding: 4px 0; border: 1px solid var(--line);
+  border-radius: 2px; background: var(--bg); }
+.pv-menu-list button { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 28px; padding: 0 12px 0 6px; white-space: nowrap;
+  text-align: left; background: none; border: 0; cursor: pointer; }
+.pv-menu-list button[aria-checked=false] svg { visibility: hidden; }
+.pv-bar-sep { flex: none; width: 1px; margin: 6px 0; background: var(--line); }
 
 .pv-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
 .pv-chips .pv-label { font-size: 13px; color: var(--mut); }
@@ -180,4 +208,11 @@ p { margin: 0; }
   .pv-viewer { height: min(60vh, 420px); flex: none; }
   .pv-body { max-height: 70vh; }
   .kv { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* forced colours (a contrast theme replaces the colours): a pressed toggle (SAS, a pocket chip, …) keeps a 2 px border in
+   the system's highlight colour, and the colour keys of the legend and the chips keep their colours */
+@media (forced-colors: active) {
+  .tag[aria-pressed=true], .pv-chips .tag[aria-pressed=true] { border: 2px solid Highlight; padding: 0 9px; }
+  .pv-sw, .pv-sw-pk, .pv-sw-sas i, .pv-dash, .dot { forced-color-adjust: none; }
 }

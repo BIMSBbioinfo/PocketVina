@@ -29,9 +29,9 @@ import pytest
 from rdkit import Chem
 
 import fake_engine as fe
-from pocketvina import PocketVinaConfig, PocketVinaGPU, gpu, pipeline
+from pocketvina import PocketVinaConfig, PocketVinaGPU, gpu, pipeline, workspace
 from pocketvina import main as pv_main
-from pocketvina.io import tables
+from pocketvina.io import sas, tables
 from pocketvina.io.posefile import Reader
 from pocketvina.io.results import Results
 from pocketvina.io.tables import read_table
@@ -44,6 +44,8 @@ DATA_DIR = TESTS_DIR / "data"
 REPO_ROOT = TESTS_DIR.parent
 PACKAGE_DIR = REPO_ROOT / "pocketvina"
 POCKETS_CSV = DATA_DIR / "legacy_run" / "proteins" / "pockets" / "AF-Q96LA5-F1-model_v4.csv"
+# P2Rank's points file of example/proteins/1fbl.pdb (ranks 1-4 and 0), where P2Rank writes it in its output folder
+POINTS_FILE = DATA_DIR / "p2rank" / "visualizations" / "data" / "1fbl.pdb_points.pdb.gz"
 FIXTURE_RECEPTOR = DATA_DIR / "legacy_run" / "proteins" / "structures" / "AF-Q96LA5-F1-model_v4.pdbqt"
 EXAMPLE_PROTEINS = ("1fbl", "2W83")
 FEW_LIGANDS = ("molecule1", "molecule2", "molecule3", "molecule5")  # quick to embed
@@ -65,12 +67,18 @@ def write_pockets(dst, n_pockets=None):
     return str(dst)
 
 
-def stub_predict_pockets(n_pockets=None, calls=None):
+def stub_predict_pockets(n_pockets=None, calls=None, points=None):
+    """``pipeline.predict_pockets`` writing the fixture predictions, and with ``points`` (a P2Rank points file) that
+    file where P2Rank writes it."""
     def predict_pockets(structure, work_dir, p2rank_config=None, *, while_running=None):
         os.makedirs(work_dir, exist_ok=True)
         if calls is not None:
             calls.append(str(structure))
-        return write_pockets(os.path.join(work_dir, os.path.basename(structure) + "_predictions.csv"), n_pockets)
+        name = os.path.basename(structure)
+        if points is not None:
+            os.makedirs(os.path.join(work_dir, "visualizations", "data"))
+            shutil.copy(points, os.path.join(work_dir, "visualizations", "data", f"{name}_points.pdb.gz"))
+        return write_pockets(os.path.join(work_dir, f"{name}_predictions.csv"), n_pockets)
     return predict_pockets
 
 
@@ -259,6 +267,68 @@ def test_atlas_end_to_end_example_proteins(tmp_path, example_dir, fake_engine_en
         assert prot.source_path == str(source) and prot.structure_file == f"structures/{p}.pdb.gz"
         assert prot.uniprot is None
         assert gzip.decompress((out / prot.structure_file).read_bytes()) == source.read_bytes()
+    with Results(out) as res:
+        assert res.sas("1fbl") is None  # P2Rank (the stub) wrote no points file
+
+
+def test_atlas_keeps_p2rank_sas_points(tmp_path, example_dir, fake_engine_env, stubs, monkeypatch):
+    """P2Rank's points file becomes sas/<protein_id>.json.gz (io.sas: the docked pockets 1 and 2 in "pockets", its
+    pockets 3 and 4 in "other_pockets"), committed with the protein; Results.sas reads it. Pockets from a CSV have
+    none."""
+    monkeypatch.setattr(pipeline, "predict_pockets", stub_predict_pockets(points=POINTS_FILE))
+    plist, smiles = make_inputs(tmp_path, example_dir, ligands=("molecule1",))
+    out = tmp_path / "results"
+    pipeline.run_atlas(PocketVinaGPU(atlas_config(plist, smiles, out, tmp_path / "tmp")))
+    assert results_files(out) == (expected_files({p: "pdb" for p in EXAMPLE_PROTEINS})
+                                  | {f"sas/{p}.json.gz" for p in EXAMPLE_PROTEINS})
+    assert os.listdir(tmp_path / "tmp") == []
+    points = sas.read_points(POINTS_FILE)
+    with Results(out) as res:
+        for p in EXAMPLE_PROTEINS:
+            expected = sas.build(points, [1, 2], p)
+            assert list(expected["pockets"]) == ["1", "2"] and list(expected["other_pockets"]) == ["3", "4"]
+            assert (out / "sas" / f"{p}.json.gz").read_bytes() == sas.encode(expected, 6)  # gzip_level 6
+            assert f"sas/{p}.json.gz" in res.manifest(p)["files"] and ResultsDir(out).verify(p) == []
+            assert res.sas(p) == expected
+        page = workspace.workspace_data(res)  # the page's data: the points without the protein's id
+        assert [prot["sas"] for prot in page["proteins"]] == [
+            {k: sas.build(points, [1, 2], p)[k] for k in sas.FIELDS} for p in res.proteins()]
+
+    pockets_dir = tmp_path / "pockets"
+    pockets_dir.mkdir()
+    write_pockets(pockets_dir / "1fbl.csv")
+    out = tmp_path / "with_csv"
+    pipeline.run_atlas(PocketVinaGPU(atlas_config(plist, smiles, out, tmp_path / "tmp",
+                                                  pockets_dir=str(pockets_dir))))
+    assert sorted(path.name for path in (out / "sas").iterdir()) == ["2W83.json.gz"]
+    with Results(out) as res:
+        assert res.sas("1fbl") is None and res.sas("2W83")["pockets"]
+
+
+def test_stage_sas_without_points(tmp_path, monkeypatch, caplog):
+    """_stage_sas: no points file gives no SAS file and one warning for the whole run; a points file with no points
+    gives none either (a warning); one not gzipped is read as the gzipped one."""
+    monkeypatch.setattr(pipeline, "_no_points_logged", False)
+    out = tmp_path / "out"
+    out.mkdir()
+    csv_path = str(out / "1fbl.pdb_predictions.csv")
+    stage = str(tmp_path / "stage")
+    with caplog.at_level(logging.WARNING, logger="pocketvina.pipeline"):
+        assert pipeline._stage_sas(csv_path, "1fbl", [1], stage, 6) is None
+        assert pipeline._stage_sas(csv_path, "2W83", [1], stage, 6) is None
+        assert caplog.text.count("P2Rank wrote no SAS points file") == 1 and "1fbl" in caplog.text
+        caplog.clear()
+        points = out / "visualizations" / "data" / "1fbl.pdb_points.pdb"
+        points.parent.mkdir(parents=True)
+        points.write_text("REMARK no points\n")
+        assert pipeline._stage_sas(csv_path, "1fbl", [1], stage, 6) is None
+        assert "has no points, none are kept" in caplog.text
+        assert not os.path.exists(os.path.join(stage, "sas"))
+    points.write_bytes(gzip.decompress(POINTS_FILE.read_bytes()))
+    rel, staged = pipeline._stage_sas(csv_path, "1fbl", [1, 2], stage, 6)
+    assert rel == "sas/1fbl.json.gz"
+    with open(staged, "rb") as f:
+        assert f.read() == sas.encode(sas.build(sas.read_points(POINTS_FILE), [1, 2], "1fbl"), 6)
 
 
 def test_atlas_file_count_per_protein(tmp_path, example_dir, fake_engine_env, stubs):
@@ -1484,13 +1554,13 @@ def test_predict_pockets_calls_while_running_and_kills_p2rank_on_errors(tmp_path
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     prank = bin_dir / "prank"
-    pid_file = tmp_path / "prank.pid"
+    pid_file, args = tmp_path / "prank.pid", tmp_path / "prank.args"
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     monkeypatch.delenv("P2RANK_HOME", raising=False)  # it would come before PATH (pocketvina.p2rank.find_p2rank)
     structure = example_dir / "proteins" / "1fbl.pdb"
 
     def install(body):
-        prank.write_text(f"#!/bin/sh\necho $$ > {shlex.quote(str(pid_file))}\n"
+        prank.write_text(f"#!/bin/sh\necho $$ > {shlex.quote(str(pid_file))}\necho \"$@\" > {shlex.quote(str(args))}\n"
                          "while [ $# -gt 0 ]; do case \"$1\" in -o) out=\"$2\"; shift;; -f) f=\"$2\"; shift;; esac; "
                          f"shift; done\n{body}\n")
         prank.chmod(0o755)
@@ -1502,6 +1572,8 @@ def test_predict_pockets_calls_while_running_and_kills_p2rank_on_errors(tmp_path
     ticks = []
     csv_path = pipeline.predict_pockets(structure, tmp_path / "p2rank", while_running=lambda: ticks.append(1))
     assert len(ticks) >= 2 and len(pipeline.read_pockets_csv(csv_path)) == 22
+    # with P2Rank's visualizations (its SAS points file), without a copy of the protein in them
+    assert " -visualizations true " in args.read_text() and " -vis_copy_proteins false " in args.read_text()
     install("exec sleep 60")
 
     def stop():
@@ -1629,6 +1701,11 @@ def test_real_p2rank(tmp_path):
     assert within(csv_path, tmp_path / "p2rank")
     pockets = pipeline.read_pockets_csv(csv_path)
     assert pockets and pockets[0].rank == 1 and pockets[0].residue_ids
+    # its SAS points: the points of every pocket, and others; no copy of the protein next to them
+    points_file = sas.points_file(csv_path)
+    assert points_file and os.listdir(os.path.dirname(points_file)) == [os.path.basename(points_file)]
+    points = sas.read_points(points_file)
+    assert {p[0] for p in points} - {0} == {p.rank for p in pockets} and any(p[0] == 0 for p in points)
 
 
 @needs_p2rank
@@ -1643,7 +1720,10 @@ def test_real_p2rank_and_receptor_end_to_end(tmp_path, example_dir, fake_engine_
     pipeline.run_atlas(pv)
     assert pv.failed_proteins == {}
     ligands = read_table(out / "tables" / "ligands.parquet")
-    check_protein(out, "1fbl", ligands, n_pockets=len(read_table(out / "tables" / "pockets" / "1fbl.parquet")), K=1,
-                  docked=(1,))
-    assert results_files(out) == expected_files({"1fbl": "pdb"})
+    n_pockets = len(read_table(out / "tables" / "pockets" / "1fbl.parquet"))
+    check_protein(out, "1fbl", ligands, n_pockets=n_pockets, K=1, docked=(1,))
+    assert results_files(out) == expected_files({"1fbl": "pdb"}) | {"sas/1fbl.json.gz"}
     assert os.listdir(tmp_path / "tmp") == []
+    with Results(out) as res:
+        points = res.sas("1fbl")
+    assert list(points["pockets"]) == ["1"] and len(points["other_pockets"]) == n_pockets - 1 and points["rest"]

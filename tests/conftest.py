@@ -14,6 +14,11 @@ docked with the example ligands; SMILES from ``test/example/ligands.txt``):
 molecule10 has a silicon atom, which the engine rejects: it has no output in any pocket, as in the original run.
 molecule2 carries a carboxylic acid; molecule5 a stereocentre (unspecified in its SMILES) and an E double bond.
 
+``tests/data/p2rank/`` is P2Rank 2.5.1's output for ``example/proteins/1fbl.pdb`` (run with ``-visualizations true
+-vis_copy_proteins false``): ``1fbl.pdb_predictions.csv`` as P2Rank wrote it (4 pockets), and its SAS points file
+``visualizations/data/1fbl.pdb_points.pdb.gz`` with every point of a pocket and every 25th of the 5000 points in no
+pocket (the lines unchanged).
+
 ``tests/data/atlas/v1.1/`` is a tiny PocketVina Atlas release in the layout of the real one (three proteins with a
 few drugs each; built by ``tests/data/atlas/make_fixture.py``, which says what is in it). ``atlas_dir`` is its path
 and ``atlas_server`` serves it over HTTP with Range support (``http_server`` serves any folder).

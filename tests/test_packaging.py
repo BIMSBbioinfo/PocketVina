@@ -25,7 +25,7 @@ PACKAGE_DIR = REPO_ROOT / "pocketvina"
 ENGINE = PACKAGE_DIR / "PocketVina-GPU"
 TRIPWIRES = ("gcc", "g++", "cc", "c++", "make", "cmake", "wget", "curl", "conda", "mamba", "apt-get", "sudo", "git")
 BUILD_TIMEOUT_S = 300
-VERSION = "0.3.3"
+VERSION = "0.4.0"
 KERNELS = sorted(p.name for p in (PACKAGE_DIR / "OpenCL" / "src" / "kernels").glob("*.cl"))
 MAKE_VARS = ("BOOST_ROOT", "BOOST_LIB_PATH", "OPENCL_ROOT", "OPENCL_LIB_PATH", "PREFIX", "DESTDIR", "CXX", "CXXFLAGS",
              "LDFLAGS", "MAKEFLAGS", "MFLAGS")

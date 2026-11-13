@@ -10,6 +10,7 @@ import logging
 import operator
 import os
 import re
+import zlib
 from collections import OrderedDict
 from typing import Dict, Iterable, List, Optional, Tuple, Union
 
@@ -20,6 +21,7 @@ import pyarrow.parquet as pq
 
 from .. import pdbqt
 from . import posefile, tables
+from .sas import decode as decode_sas
 from .writer import FORMAT, ResultsDir
 
 logger = logging.getLogger(__name__)
@@ -528,6 +530,30 @@ class Results:
         with open(path, "rb") as f:
             data = f.read()
         return gzip.decompress(data) if path.endswith(".gz") else data
+
+    def sas(self, protein: str) -> Optional[dict]:
+        """P2Rank's solvent accessible surface (SAS) points of a protein, or None if the results have none (its pockets
+        came from a CSV file, or the results were written by an older PocketVina):
+
+            res.sas("1fbl")["pockets"]["1"][:2]   # [[x, y, z, score], [x, y, z, score]]
+
+        A dict with "protein", "pockets" (the points of each docked pocket, by P2Rank rank), "other_pockets" (the
+        points of P2Rank's other pockets) and "rest" (the points in no pocket); a point is [x, y, z, score]. Read from
+        ``sas/<protein_id>.json.gz`` (see the Results format page of the documentation).
+
+        protein: a protein id, e.g. "1fbl".
+        """
+        pid = self._protein(protein)
+        rel = f"sas/{pid}.json.gz"
+        if rel not in (self._dir.protein_manifest(pid) or {}).get("files", {}):
+            return None  # none, or one left by an earlier run of the protein
+        path = os.path.join(self.path, *rel.split("/"))
+        try:
+            with open(path, "rb") as f:
+                return decode_sas(f.read())
+        except (OSError, ValueError, EOFError, zlib.error) as e:
+            logger.warning("%s: cannot read the SAS points %s: %s", pid, path, e)
+            return None
 
     # --- exports ---------------------------------------------------------------------------------------------------
 

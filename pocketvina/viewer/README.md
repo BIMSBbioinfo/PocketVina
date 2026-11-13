@@ -10,7 +10,8 @@ protein page of the [PocketVina Atlas](https://pocketvina-atlas.mdc-berlin.de/).
 | `upstream/viewer.js` | the original, to compare: `diff -u upstream/viewer.js viewer.js` |
 | `bridge.js`, `workspace.js`, `workspace.css` | the page around the viewer, written for PocketVina |
 
-The Atlas files come from the source of the PocketVina Atlas website, git commit `40e8d59`.
+The Atlas files come from the source of the PocketVina Atlas website, git commit `40e8d59`. The SAS points and the
+hidden protein and ligand in `viewer.js` came later, from its rounds 14r and 14t, marked `PocketVina:` as well.
 
 The page (`pocketvina/workspace.py`) keeps itself safe to open:
 
@@ -29,6 +30,7 @@ page of docking results looks as before:
 | `proteins[].pockets[].plddt` | a pLDDT column in Pockets |
 | `ligands[].ids` | the identifier rows of Selected pair (label, value, link, tooltip, a collapsed long list), each with a copy button |
 | `proteins[].rows[].pb` | the PoseBusters row of the highest-affinity pose (also on a results page, where the run has a result) |
+| `proteins[].sas` | P2Rank's SAS points, which the SAS toggle of the Pockets row draws (also on a results page, where the run kept them; without them the toggle is greyed out) |
 | `proteins[].topNote` | the text above Top hits; the rows are the site's Top hits (drugs with a PoseBusters-valid pose), `rank` and `n` count the drugs (`rank` null: not ranked, e.g. a row docked as a salt counterion) |
 
 On an Atlas page the texts name the protein by its gene (`info.title`) and use the site's words ("rank X of N drugs on

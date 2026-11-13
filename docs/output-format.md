@@ -13,6 +13,7 @@ results/
   manifest/<protein_id>.json         written last for each protein: the protein is done
   poses/<protein_id>.poses           highest-affinity pose per ligand as SDF, every engine output as PDBQT
   structures/<protein_id>.pdb.gz     the input structure, gzipped
+  sas/<protein_id>.json.gz           P2Rank's solvent accessible surface points, when the run ran P2Rank
   tables/
     ligands.parquet                  one table for the whole run
     proteins/<protein_id>.parquet    the other tables have one part per protein
@@ -87,6 +88,12 @@ The input structure of a protein, as bytes:
 
 ```python
 res.structure("1fbl")
+```
+
+P2Rank's solvent accessible surface (SAS) points of a protein ([SAS points](#sas-points)), or None:
+
+```python
+res.sas("1fbl")
 ```
 
 `Results` reads only the proteins that are done.
@@ -263,6 +270,27 @@ Written by `pocketvina bust` or `posebusters=True`. See [PoseBusters checks](pos
 pose of every ligand as SDF, highest-affinity first. Part B has every engine output as PDBQT, with all modes. The
 offset columns of the tables point into this file. `Results` reads the poses for you with `top_sdf()`, `pose_block()`
 and `pose_model()`.
+
+## SAS points
+
+`sas/<protein_id>.json.gz` holds P2Rank's solvent accessible surface (SAS) points of one protein: the points around
+the protein that P2Rank scores to find the pockets. The file is gzipped JSON:
+
+```text
+{"protein": "1fbl",
+ "pockets": {"1": [[x, y, z, score], ...], "2": [...]},
+ "other_pockets": {"3": [...], "4": [...]},
+ "rest": [[x, y, z, score], ...]}
+```
+
+- `pockets`: the points of each docked pocket, by P2Rank rank. The coordinates have 2 decimals, the score 3.
+- `other_pockets`: the points of P2Rank's other pockets, and `rest` the points in no pocket. Their coordinates have 1
+  decimal, the score 2.
+
+The coordinates are in Å, in the frame of the input structure. The score is P2Rank's score of the point, from 0 to 1.
+A run writes the file when it runs P2Rank. A protein docked into the pockets of a CSV file has none, nor do the
+proteins of older results. The PocketVina Atlas has the same files, `sas/<UniProt>.json.gz`, with `uniprot` instead
+of `protein`. The SAS button of the 3D page draws the points ([3D views](visualisation.md)).
 
 ## The "files" format
 

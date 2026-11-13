@@ -29,6 +29,7 @@ import operator
 import os
 import re
 import threading
+import zlib
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -37,6 +38,7 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 import pandas as pd
 
 from . import __version__, pdbqt
+from .io import sas
 from .io.atlas_source import Source, pose_records, top_record
 from .selection import Selection, _check_mode, _check_pocket, _pick_poses, _short, name_part
 
@@ -65,7 +67,8 @@ CHEMBL_URL = "https://www.ebi.ac.uk/chembl/explore/compound/{}"
 SUBSET_TABLES = ("compound_entries", "compound_entries_annotated", "compounds", "proteins")
 SUBSET_FILES = ("ligand_ids.json", "LICENSE")
 SUBSET_NOTE = ("A part of the PocketVina Atlas, written by pocketvina's Atlas.download(): for these proteins their "
-               "files of proteins/, salt_forms/, poses/, poses_redock/ and structures/, and from the release every "
+               "files of proteins/, salt_forms/, poses/, poses_redock/, structures/ and sas/ (with sas/MANIFEST.json "
+               "listing them), and from the release every "
                "drug page (compounds/<PVL>.json.gz), the search files (search/), the tables compound_entries, "
                "compound_entries_annotated, compounds and proteins (tables/), ligand_ids.json and LICENSE (the "
                "data's licence, if the release has one), all as released (byte-identical copies, checked against "
@@ -73,7 +76,8 @@ SUBSET_NOTE = ("A part of the PocketVina Atlas, written by pocketvina's Atlas.do
                "best_scores(ligand=...) lists the proteins of this subset only, from their proteins/<UniProt>.json "
                "rows, and search() lists them and every drug. The identifiers of every protein and drug of the "
                "release are known (a protein outside the subset: an error that says so).")
-_SUBSET_FOLDERS = ("proteins", "salt_forms", "poses", "poses_redock", "structures", "compounds", "search", "tables")
+_SUBSET_FOLDERS = ("proteins", "salt_forms", "poses", "poses_redock", "structures", "sas", "compounds", "search",
+                   "tables")
 _SHOWN = 10  # candidates listed in an "ambiguous identifier" error
 # identifiers that go into a link of a page (the site's checks, lib/keys.ts RX and app/protein/[id]/page.tsx)
 _CHEMBL_ID = re.compile(r"^CHEMBL\d{1,9}$")
@@ -89,6 +93,9 @@ _INCHIKEY_BLOCK = re.compile(r"^[A-Za-z]{14}$")
 _WORDS = re.compile(r"[\s,;()\[\]/]+")  # how the release splits names into search tokens
 SEARCH_COLUMNS = ("kind", "id", "name", "matched", "value")
 SEARCH_TOP = 20  # rows atlas.search returns by default
+# P2Rank's SAS points of each protein are in sas/<U>.json.gz (pocketvina.io.sas); this file lists them with their
+# sha256 and size, {"<U>.json.gz": [sha256, bytes]} (the release's MANIFEST.json does not list sas/)
+SAS_MANIFEST = "sas/MANIFEST.json"
 # atlas.search ranks a match by the score the Atlas website's search box gives it (components/Search.tsx), so that a
 # query lists proteins and drugs in the same order on both. Proteins: _protein_score. Drugs, per identifier: the score
 # of an exact match, (score, shortest query) of a match at its start and of one inside it (None: not matched that way);
@@ -568,6 +575,7 @@ class Atlas:
         self._key_columns: Optional[Dict[str, int]] = None
         self._hgnc: Optional[Dict[str, List[str]]] = None
         self._page_names: Optional[Dict[str, str]] = None
+        self._sas_files: Optional[Dict[str, list]] = None  # sas/MANIFEST.json, read on first use
 
     def _read_meta(self) -> dict:
         where = self.source.location
@@ -947,6 +955,36 @@ class Atlas:
         return (_text(top) if top else None,
                 {k: _text(block) for k, block in enumerate(blocks, 1) if block})
 
+    def _sas(self, uniprot: str) -> Optional[dict]:
+        """P2Rank's SAS points of a protein (sas/<U>.json.gz, ``io.sas.decode``), checked against sas/MANIFEST.json
+        (sha256 and size); over HTTP the file is kept in the cache, so it is read from there afterwards. None when the
+        release has none (an older release or download) or they cannot be read now, e.g. without network, or
+        sas/MANIFEST.json lists them wrongly (a warning): the page is shown without them."""
+        try:
+            entry = self._sas_listing().get(f"{uniprot}.json.gz")
+            if entry is None:
+                return None
+            if not _sas_entry(entry):
+                raise ValueError(f"{SAS_MANIFEST} does not list it as [sha256, bytes]")
+            path = self.source.file(f"sas/{uniprot}.json.gz", size=entry[1], sha256=entry[0])
+            with open(path, "rb") as f:
+                return sas.decode(f.read())
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError, EOFError, zlib.error) as e:
+            logger.warning("%s: the page is shown without P2Rank's SAS points, which cannot be read: %s", uniprot, e)
+            return None
+
+    def _sas_listing(self) -> dict:
+        """sas/MANIFEST.json, {"<U>.json.gz": [sha256, bytes]}, read once; {} when the release has no sas/."""
+        if self._sas_files is None:
+            try:
+                listed = self.source.json(SAS_MANIFEST)
+            except FileNotFoundError:
+                listed = {}
+            self._sas_files = listed if isinstance(listed, dict) else {}
+        return self._sas_files
+
     def _structure(self, data: dict) -> str:
         """PDB text of the AlphaFold model the drugs were docked into (structures/<AF id>.pdb.gz of the release, or
         .pdb); ``data``: the protein's JSON."""
@@ -1068,13 +1106,14 @@ class Atlas:
 
     def _page(self, uniprot: str, max_ligands: Optional[int], pair: Optional[_Pair] = None) -> dict:
         """The page's data (``workspace.workspace_data``'s format): the protein (its AlphaFold model, pockets with
-        pLDDT, information) and its Top hits as the Atlas site lists them (its rows of drugs whose highest-affinity
-        pose is PoseBusters-valid, best first; ``max_ligands`` of them), and ``pair``'s row if it is not among them,
-        each with its poses in every pocket, its top pose (SDF), its stored PoseBusters result and its drug's
-        identifiers. As on the site, ``rank`` and ``n`` count the protein's rows of drugs (a row docked as something
-        else than a drug, or a catalogue number's own run, has no rank). The rows' poses (``pose_records``: two rounds
-        of reads), their drug pages and the structure are fetched at the same time (``PAGE_THREADS``)."""
-        from .workspace import _initial, ligand_svg
+        pLDDT, information, P2Rank's SAS points when the release has them) and its Top hits as the Atlas site lists
+        them (its rows of drugs whose highest-affinity pose is PoseBusters-valid, best first; ``max_ligands`` of them),
+        and ``pair``'s row if it is not among them, each with its poses in every pocket, its top pose (SDF), its stored
+        PoseBusters result and its drug's identifiers. As on the site, ``rank`` and ``n`` count the protein's rows of
+        drugs (a row docked as something else than a drug, or a catalogue number's own run, has no rank). The rows'
+        poses (``pose_records``: two rounds of reads), their drug pages, the structure and the SAS points are fetched
+        at the same time (``PAGE_THREADS``)."""
+        from .workspace import _initial, _page_sas, ligand_svg
 
         data = self._protein_json(uniprot)
         rows = [dict(zip(data["columns"], r)) for r in data["rows"]]  # best first
@@ -1103,6 +1142,7 @@ class Atlas:
             def ask_later():
                 if not later:
                     later.append(pool.submit(self._structure, data))
+                    later.append(pool.submit(self._sas, uniprot))
                     later.extend(pool.submit(drug, row) for row in listed)
 
             def first_round_first(fn, items):
@@ -1112,7 +1152,8 @@ class Atlas:
 
             poses = self._poses([(*_pose_ref(data, row), row) for row in listed], first_round_first)
             ask_later()
-            structure, drugs_of_rows = later[0].result(), [future.result() for future in later[1:]]
+            structure, points = later[0].result(), later[1].result()
+            drugs_of_rows = [future.result() for future in later[2:]]
         checks, statuses = list(self.meta.get("pb_checks") or []), list(self.meta.get("pb_status") or [])
         items, ligands = [], {}
         for row, (blocks, top), (info, across) in zip(listed, poses, drugs_of_rows):
@@ -1142,6 +1183,8 @@ class Atlas:
                                 "residues": _strings(p.get("residues")), "docked": True,
                                 "plddt": _num(p.get("plddt"), 1)} for p in pockets],
                    "info": _protein_info(data, self.meta)}
+        if points is not None:
+            protein["sas"] = _page_sas(points)
         return {"format": 1, "proteins": [protein], "ligands": ligands, "maxLigands": max_ligands,
                 "initial": _initial(None, uniprot, docked)}
 
@@ -1162,8 +1205,9 @@ class Atlas:
             where it stopped).
 
         Returns the folder's path. Every file is a byte-identical copy of the release's file, checked against the
-        release's MANIFEST.json (size and sha256; salt_forms/ and LICENSE, which it does not list, by size). In the
-        folder, best_scores(ligand=...) and search() list its proteins only (and every drug).
+        release's MANIFEST.json (size and sha256; salt_forms/ and LICENSE, which it does not list, by size; the SAS
+        points sas/<U>.json.gz against sas/MANIFEST.json, which the folder gets for its proteins). In the folder,
+        best_scores(ligand=...) and search() list its proteins only (and every drug).
         The folder carries the release's LICENSE (the licence of the data), if the release has one.
         """
         uniprots = self._protein_list(proteins)
@@ -1176,12 +1220,19 @@ class Atlas:
               f"protein{'s' if len(uniprots) != 1 else ''} into {out}"
               + (f" ({there:,} of them there already: kept if their sha256 is right)" if there else ""), flush=True)
         copied = self._copy_files(files, out, total)
+        # sas/MANIFEST.json of the folder: its proteins' SAS files, as the release lists them (Atlas._sas reads it)
+        sas_listed = {rel[4:]: [digest, n] for rel, (n, digest) in copied.items() if rel.startswith("sas/")}
+        sas_manifest = json.dumps(dict(sorted(sas_listed.items())), indent=0).encode("utf-8") if sas_listed else None
+        if sas_manifest:
+            _write_bytes(os.path.join(out, *SAS_MANIFEST.split("/")), sas_manifest)
         subset = {"proteins": uniprots, "of": self.source.location, "release": self.release,
                   "created": datetime.now(timezone.utc).isoformat(timespec="seconds"), "pocketvina": __version__,
                   "note": SUBSET_NOTE}
         meta = (json.dumps(dict(self.meta, subset=subset), indent=1, ensure_ascii=False) + "\n").encode("utf-8")
         listed = {rel: {"bytes": n, "sha256": digest} for rel, (n, digest) in copied.items()}
         listed["meta.json"] = {"bytes": len(meta), "sha256": hashlib.sha256(meta).hexdigest()}
+        if sas_manifest:
+            listed[SAS_MANIFEST] = {"bytes": len(sas_manifest), "sha256": hashlib.sha256(sas_manifest).hexdigest()}
         manifest = {"release": self.release, "subset": subset, "files": dict(sorted(listed.items()))}
         _write_bytes(os.path.join(out, "MANIFEST.json"), (json.dumps(manifest, indent=1) + "\n").encode("utf-8"))
         _write_bytes(os.path.join(out, "meta.json"), meta)  # last: the folder is a release once it has meta.json
@@ -1204,7 +1255,8 @@ class Atlas:
     def _subset_files(self, uniprots: List[str]) -> Dict[str, Tuple[Optional[int], Optional[str]]]:
         """The files of a download of these proteins: path -> (bytes, sha256) as the release's MANIFEST.json lists
         them; for a file it does not list (salt_forms/, LICENSE), its size and None. salt_forms/ and LICENSE are left
-        out if the source does not have them (LICENSE even if its MANIFEST.json lists it, as a download's does)."""
+        out if the source does not have them (LICENSE even if its MANIFEST.json lists it, as a download's does). The
+        proteins' SAS points (sas/<U>.json.gz) as sas/MANIFEST.json lists them, if the source has them."""
         try:
             listed = self.source.json("MANIFEST.json")["files"]
         except FileNotFoundError:
@@ -1232,6 +1284,18 @@ class Atlas:
                 # salt_forms/ is in the public copy of the release only; an older release or download has no LICENSE
                 if not (rel.startswith("salt_forms/") or rel == "LICENSE"):
                     raise
+        try:
+            sas_files = self._sas_listing()
+        except ValueError as e:  # not JSON: the download goes on without them
+            logger.warning("the SAS points (sas/) are not copied: %s cannot be read: %s", SAS_MANIFEST, e)
+            sas_files = {}
+        for uniprot in uniprots:
+            entry = sas_files.get(f"{uniprot}.json.gz")
+            if entry is not None and _sas_entry(entry):
+                files[f"sas/{uniprot}.json.gz"] = (entry[1], entry[0])
+            elif entry is not None:
+                logger.warning("%s: not copied, %s does not list it as [sha256, bytes]", f"sas/{uniprot}.json.gz",
+                               SAS_MANIFEST)
         return files
 
     def _copy_files(self, files: Dict[str, Tuple[Optional[int], Optional[str]]], out: str,
@@ -1308,6 +1372,12 @@ def _earlier_download(out: str, release: str) -> List[str]:
     elif os.path.lexists(out):
         raise ValueError(f"{out} is a file, not a folder: {rule}")
     return []
+
+
+def _sas_entry(entry) -> bool:
+    """Whether an entry of sas/MANIFEST.json is [sha256, bytes]."""
+    return (isinstance(entry, list) and len(entry) == 2 and isinstance(entry[0], str) and isinstance(entry[1], int)
+            and not isinstance(entry[1], bool))
 
 
 def _has_size(path: str, size: Optional[int]) -> bool:
