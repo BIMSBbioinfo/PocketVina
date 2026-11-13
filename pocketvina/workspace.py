@@ -2,13 +2,15 @@
 and ``Selection.show()``.
 
 One self-contained HTML document: the 3D view of the Atlas site (its Mol* viewer, ``pocketvina/viewer/viewer.js``, in a
-frame of the page) with the controls around it (pocket chips, legend, protein style, Reset view, Save image) beside the
-tabs Top hits, Selected pair, Pockets and Download, rebuilt in plain JavaScript (``pocketvina/viewer/workspace.js``).
-Every pose the page can show is in it (the PDBQT output of every docked pocket of each listed ligand, its best pose as
-SDF), with the protein structures, the P2Rank pockets and a 2D drawing of each ligand, so it works offline, in a
-saved notebook and on Colab. The data (``workspace_data``) and the viewer's code are gzip-compressed and base64-encoded
-in the page; the browser unpacks them (DecompressionStream). PoseBusters results are shown only where the results
-directory has them (PoseBusters is optional: ``pocketvina bust`` stores them, ``Selection.bust`` runs it in memory).
+frame of the page) with the controls around it (legend, the protein and the ligand shown or hidden, protein style, SAS
+toggle, pocket chips, Reset view, Save image) beside the tabs Top hits, Selected pair, Pockets and Download, rebuilt in
+plain JavaScript (``pocketvina/viewer/workspace.js``). Every pose the page can show is in it (the PDBQT output of every
+docked pocket of each listed ligand, its best pose as SDF), with the protein structures, the P2Rank pockets (and
+P2Rank's SAS points, ``sas``, where the results or the Atlas have them: the SAS toggle draws them) and a 2D drawing of
+each ligand, so it works offline, in a saved notebook and on Colab. The data (``workspace_data``) and the viewer's code
+are gzip-compressed and base64-encoded in the page; the browser unpacks them (DecompressionStream). PoseBusters results
+are shown only where the results directory has them (PoseBusters is optional: ``pocketvina bust`` stores them,
+``Selection.bust`` runs it in memory).
 See ``pocketvina/viewer/README.md`` for the files and the changes to the site's code.
 
 ``Atlas.show`` and ``Selection.show`` of a pair of the PocketVina Atlas build the same page from the Atlas
@@ -37,6 +39,7 @@ import numpy as np
 import pandas as pd
 
 from . import pdbqt
+from .io import sas
 from .io.results import Results, short_floats
 from .selection import Selection, name_part
 
@@ -175,6 +178,12 @@ def _pocket_poses(res: Results, pid: str, i: int, pockets: Sequence[int]) -> Lis
     return out
 
 
+def _page_sas(points: dict) -> dict:
+    """A protein's ``sas`` in the page: its SAS points (``Results.sas``) without its id, as the file has them:
+    "pockets" (the docked pockets'), "other_pockets" and "rest" (``io.sas``)."""
+    return {field: points[field] for field in sas.FIELDS}
+
+
 def _initial(sel: Optional[Selection], pid: str, docked: List[int]) -> dict:
     """The page's first state: the protein alone (Top hits, every docked pocket's surface), or a selected pair."""
     if sel is None:
@@ -303,11 +312,12 @@ def _posebusters(res: Results, pids: Sequence[str]) -> dict:
 
 def workspace_data(res: Results, proteins: Optional[Sequence[str]] = None, *, max_ligands: Optional[int] = MAX_LIGANDS,
                    selection: Optional[Selection] = None) -> dict:
-    """What the page shows (a JSON-ready dict): per protein its PDB text, P2Rank pockets, docked pockets and the
-    ``max_ligands`` best ligands (best Vina score first; the selected one too) with their poses in every docked
-    pocket (PDBQT, all modes), their best pose as SDF, their Vina score, rank, ligand efficiency and rank among the
-    proteins; the ligands' ids, SMILES and 2D drawings; the first state (``_initial``). ``proteins``: ids (None: all
-    proteins of the results). Only the listed pairs are read (``_listed``)."""
+    """What the page shows (a JSON-ready dict): per protein its PDB text, P2Rank pockets, docked pockets, P2Rank's SAS
+    points (``sas``, only when the results have them) and the ``max_ligands`` best ligands (best Vina score first; the
+    selected one too) with their poses in every docked pocket (PDBQT, all modes), their best pose as SDF, their Vina
+    score, rank, ligand efficiency and rank among the proteins; the ligands' ids, SMILES and 2D drawings; the first
+    state (``_initial``). ``proteins``: ids (None: all proteins of the results). Only the listed pairs are read
+    (``_listed``)."""
     from .bust import _protein_pdb
 
     pids = list(proteins) if proteins is not None else res.proteins()
@@ -336,6 +346,9 @@ def workspace_data(res: Results, proteins: Optional[Sequence[str]] = None, *, ma
         out.append({"id": pid, "name": name_part(pid), "key": f"structures/{pid}.pdb", "pdb": _protein_pdb(res, pid),
                     "pockets": _pockets(res, pid, docked), "docked": docked, "n": int(n_of.get(pid, 0)),
                     "rows": items})
+        points = res.sas(pid)
+        if points is not None:
+            out[-1]["sas"] = _page_sas(points)
     ligands = {}
     for i in sorted(used):
         # smiles_input: as the user gave it; smiles_docked: the fragment docked (e.g. without a salt's counter-ion)

@@ -1,9 +1,11 @@
 'use strict';
 /* PocketVina workspace (pocketvina/workspace.py, README.md): the PocketVina Atlas website's protein page (components/ProteinWorkspace.tsx,
  * Viewer.tsx and cells.tsx, file names from lib/keys.ts; commit 40e8d59) rebuilt in plain JavaScript for a self-contained page: the 3D
- * view (viewer.js of the site in a frame, see bridge.js) with its legend and protein style buttons, the pocket chips, Reset view and
- * Save image under it, beside the tabs Top hits, Selected pair, Pockets and Download (the files, and Python lines that select the shown
- * pair and save it: pocketvina.select(protein=<P.id>, ligand=<L.id>)); a protein menu when the page holds several proteins. The
+ * view (viewer.js of the site in a frame, see bridge.js) with its legend and, under it, the bar that shows or hides the protein and the
+ * ligand and sets the protein's style (the site's round 14t), the SAS toggle (P2Rank's SAS points, P.sas, when the data has them; the
+ * site's round 14r) and pocket chips, Reset view and Save image under it, beside the tabs Top hits, Selected pair, Pockets and Download
+ * (the files, and Python lines that select the shown pair and save it: pocketvina.select(protein=<P.id>, ligand=<L.id>)); a protein
+ * menu when the page holds several proteins. The
  * page's data (workspace.py: workspace_data) and the frame's code are in the script elements #pv-data and #pv-assets (JSON, gzip,
  * base64). Every pose is in the data: no request is made (with molstar="url" the frame loads the Mol* bundle from the Atlas website).
  * A page of the PocketVina Atlas (atlas.py: Atlas._page) has optional fields, drawn only when present, with their wording in the data:
@@ -34,7 +36,10 @@
     eye: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
     eyeOff: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><path d="m3 3 18 18"/></svg>',
     copy: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
+    check: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>',
   };
+  // P2Rank's SAS points in the legend: the colour scale viewer.js draws (score 0 green to 0.7 red, linear in RGB; the site's round 14r)
+  const SAS_SWATCH = ['#00FF00', '#55AA00', '#AA5500', '#FF0000'];
   const root = document.getElementById('pv-root');
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const fmt = (x, d = 1) => (x == null || Number.isNaN(Number(x)) ? '–' : Number(x).toFixed(d));     // cells.tsx
@@ -63,6 +68,7 @@
     allModes: false,
     show: [], userShow: false, selShow: [],      // surfaces asked for; a chip was used (selections keep the surfaces); the selection's own
     focusPocket: null, focusRes: null, hidden: [], pstyle: 'cartoon',
+    protHidden: false, ligHidden: false, sasOn: false,  // the protein, the pose hidden in 3D; the SAS toggle (all kept on any change)
     tab: 'top', q: '', openPocket: null, theme: 'light', themeFixed: false,
     contacts: null, contactsAll: null, focus3d: { active: false, key: null, line: false }, surfaces: [], names: null,
     status: 'Loading 3D…', framed: false, drawn: false, legendOpen: true, imgScale: 2, imgTransparent: false, imageBusy: false,
@@ -131,13 +137,65 @@
     update();
   }
 
+  // ------------------------------------------------------------ P2Rank's SAS points (P.sas; viewer.js draws them, as the site's round 14r)
+  // P.sas = {pockets: {rank: [[x, y, z, score], …]} (the docked pockets), other_pockets: {rank: […]}, rest: […]} (workspace.py _page_sas).
+  // The SAS toggle is off at first. Switched on, the protein's points are made once into the lists viewer.js takes ({pockets: {rank:
+  // [x, y, z, score, …]}, others, rest}; Float64Array) and go to the 3D view with each 'show' while it is on. A protein without points
+  // (older results, pockets from a CSV) has the toggle greyed out; points that cannot be read or drawn: the toggle says so (sasErr).
+  const sasLists = new Map(), sasSizes = new Map(), sasErr = new Set();
+  function sasSize(P) {                                          // the number of points (0: none), without reading them
+    if (!sasSizes.has(P.id)) {
+      const s = P.sas, len = v => (Array.isArray(v) ? v.length : 0);
+      let n = 0;
+      if (s && typeof s === 'object') {
+        for (const f of ['pockets', 'other_pockets']) for (const v of Object.values(s[f] && typeof s[f] === 'object' ? s[f] : {})) n += len(v);
+        n += len(s.rest);
+      }
+      sasSizes.set(P.id, n);
+    }
+    return sasSizes.get(P.id);
+  }
+  function sasPoints(P) {                                        // the lists of viewer.js (made once); an Error when a point is not 4 numbers
+    if (!sasLists.has(P.id)) {
+      const flat = (...sets) => {
+        const pts = [].concat(...sets.map(v => (Array.isArray(v) ? v : []))), a = new Float64Array(pts.length * 4);
+        pts.forEach((p, i) => {
+          if (!Array.isArray(p) || p.length < 4) throw new Error('a SAS point is not [x, y, z, score]');
+          for (let j = 0; j < 4; j++) { const v = p[j]; if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error('a SAS point is not [x, y, z, score]'); a[4 * i + j] = v; }
+        });
+        return a;
+      };
+      const s = P.sas, pockets = {};
+      for (const [k, v] of Object.entries(s.pockets || {})) pockets[k] = flat(v);
+      sasLists.set(P.id, { pockets, others: flat(...Object.values(s.other_pockets || {})), rest: flat(s.rest) });
+    }
+    return sasLists.get(P.id);
+  }
+  // 'none': no points; 'error': they could not be read (here) or drawn (viewer.js); else 'ready'
+  const sasStatus = P => (!sasSize(P) ? 'none' : sasErr.has(P.id) ? 'error' : 'ready');
+  // the points are drawn: the toggle on and the protein's points read (the first time here)
+  function sasShown() {
+    const P = S.prot;
+    if (!S.sasOn || sasStatus(P) !== 'ready') return false;
+    try { sasPoints(P); return true; } catch (e) { sasErr.add(P.id); return false; }
+  }
+  function toggleSas() {
+    const P = S.prot;
+    if (S.sasOn && sasStatus(P) === 'ready') S.sasOn = false;
+    else if (sasSize(P)) { sasErr.delete(P.id); sasLists.delete(P.id); S.sasOn = true; }   // after an error: try again
+    update();
+  }
+
   // ------------------------------------------------------------ the 3D frame (viewer.js of the site; bridge.js)
   let frame = null, frameReady = false, lastSpec = '', sentStructure = '', lastPoseKey = '';
   const toFrame = m => { if (frame && frame.contentWindow) frame.contentWindow.postMessage({ pv: 'page', m }, '*'); };
+  // the protein hidden is the style 'none' (viewer.js); sas: the protein's key while the points are drawn (send() puts the points in);
+  // hideLigand only with a pose (without one, a residue picked in a list keeps its sticks)
   function spec() {
     const P = S.prot;
     return { theme: S.theme, protein: P.key, name: P.name, pockets: P.pockets.map(p => ({ rank: p.rank, residues: p.residues })), showPockets: S.show.slice(),
-      proteinStyle: S.pstyle, focusPocket: S.focusPocket, focusResidue: S.focusRes, hiddenInteractions: S.hidden.slice(), ligand: ligandSpec() };
+      proteinStyle: S.protHidden ? 'none' : S.pstyle, focusPocket: S.focusPocket, focusResidue: S.focusRes, hiddenInteractions: S.hidden.slice(), ligand: ligandSpec(),
+      sas: sasShown() ? P.key : null, hideLigand: !!(S.ligHidden && S.row) };
   }
   function ligandSpec() {
     const r = S.row; if (!r) return null;
@@ -153,7 +211,7 @@
     if (!force && k === lastSpec) return;
     if (sentStructure !== S.prot.key) { toFrame({ type: 'structure', path: S.prot.key, text: S.prot.pdb }); sentStructure = S.prot.key; }
     lastSpec = k;
-    toFrame({ type: 'show', spec: s });
+    toFrame({ type: 'show', spec: s.sas ? { ...s, sas: { protein: s.sas, ...sasPoints(S.prot) } } : s });
     if (!S.framed && !S.drawn) setStatus('Drawing…');
   }
   function frameDoc() {
@@ -186,6 +244,7 @@
         update(); break;
       case 'residues': if (m.residues && m.protein === S.prot.key) { S.names = m.residues; update(); } break;
       case 'surfaces': if (Array.isArray(m.shown)) { S.surfaces = m.shown.map(Number).filter(k => Number.isInteger(k) && k >= 1); update(); } break;
+      case 'sas': { const P = D.proteins.find(p => p.key === m.protein); if (P && m.error) { sasErr.add(P.id); update(); } break; }   // could not be drawn
       case 'image': { const w = images.get(m.id); if (w) { images.delete(m.id); if (m.error) w.reject(new Error(m.error)); else w.resolve(m); } break; }
       default: break;
     }
@@ -239,13 +298,24 @@
   // ------------------------------------------------------------ rendering (each part's HTML is replaced only when it changed)
   const set = (el, h) => { if (el && el.__pv !== h) { el.__pv = h; el.innerHTML = h; } };
   const $ = id => document.getElementById(id);
+  // set(), and a control of el that had the focus (a button pressed: the SAS toggle, a chip, a button of the bar) has it again when drawn
+  // anew; only while the page has the focus (else focus() would take it from where the user is now, as for the Python lines)
+  function setKeep(el, h) {
+    const a = document.hasFocus() ? document.activeElement : null, v = a && a.dataset ? a.dataset.v : null;
+    const sel = a && a !== el && el.contains(a) ? (a.tagName === 'SUMMARY' ? 'summary'
+      : a.dataset.act ? `[data-act="${a.dataset.act}"]${v != null ? `[data-v="${CSS.escape(v)}"]` : ''}` : null) : null;
+    set(el, h);
+    const now = sel && !a.isConnected ? el.querySelector(sel) : null;
+    if (now && !now.disabled) now.focus({ preventScroll: true });
+  }
   function setStatus(t) { S.status = t; const el = $('pv-status'); if (el) el.textContent = t; }
   function layout() {
     root.innerHTML = `<header class="pv-head"><span class="pv-brand">PocketVina</span><span id="pv-proteins"></span><span class="pv-title" id="pv-title"></span>`
       + `<button type="button" class="btn" data-act="theme" id="pv-theme"></button></header>`
       + (D.proteins.some(p => p.info) ? `<div class="pv-info" id="pv-info"></div>` : '')
       + `<div class="pv-main"><div class="pv-left"><div class="pv-viewer" id="pv-viewer"><span class="pv-status" id="pv-status" role="status"></span>`
-      + `<div class="pv-overlay" id="pv-overlay"></div></div><div class="pv-chips" id="pv-chips"></div></div>`
+      + `<div class="pv-overlay" id="pv-overlay"><div class="pv-slot" id="pv-legend-slot"></div><div class="pv-slot" id="pv-bar-slot"></div></div></div>`
+      + `<div class="pv-chips" id="pv-chips"></div></div>`
       + `<div class="pv-panel"><div class="pv-tabs" role="tablist" aria-label="Panels" id="pv-tabs"></div><div class="pv-body" id="pv-body"></div></div></div>`
       + `<div class="pv-shot" id="pv-shot" hidden></div><div class="pv-toast" id="pv-toast" role="status" hidden></div>`;
     frame = document.createElement('iframe');
@@ -281,14 +351,20 @@
       + (I.links || []).map(x => `<span><span class="mut">${esc(x.label)} </span>${extLink(x.href, esc(x.value))}</span>`).join('') + facts + diseases);
   }
   function renderOverlay() {
-    // Viewer.tsx: the legend of what is drawn now and, above it, the protein's style buttons; once the view is drawn
-    if (!S.drawn) { set($('pv-overlay'), ''); return; }
-    const hasLig = !!S.row, lg = hasLig && S.contacts && S.contacts.key === poseKey() ? S.contacts : null;
+    // Viewer.tsx (the site's round 14t): the legend of what is drawn now and, under it at the very bottom, the bar that shows or hides
+    // the protein and the ligand, with the protein's style; once the view is drawn. Each has its own slot: the legend changes with every
+    // drawing, and the bar's style menu stays open meanwhile
+    if (!S.drawn) { set($('pv-legend-slot'), ''); set($('pv-bar-slot'), ''); return; }
+    const ligShown = !!S.row && !S.ligHidden, lg = ligShown && S.contacts && S.contacts.key === poseKey() ? S.contacts : null;
     const types = lg ? INTERACTIONS.filter(([t]) => lg.counts[t] || lg.hidden.includes(t)) : [];
     const proteinC = S.theme === 'dark' ? '#8C96A3' : '#A9B1BB';
-    const colours = (hasLig ? `<li data-carbon="ligand"><i class="pv-sw" style="background:${LIGAND_C}"></i><b>C</b><span class="mut">ligand</span></li>` : '')
-      + `<li data-carbon="protein"><i class="pv-sw" style="background:${proteinC}"></i><b>C</b><span class="mut">protein</span></li>`
+    // the legend follows what is shown: no ligand rows while it is hidden, no protein carbon with neither the protein nor the residue
+    // sticks around the pose shown; the SAS points' colours (green 0 to red 0.7, no numbers) while they are shown
+    const colours = (ligShown ? `<li data-carbon="ligand"><i class="pv-sw" style="background:${LIGAND_C}"></i><b>C</b><span class="mut">ligand</span></li>` : '')
+      + (!S.protHidden || ligShown ? `<li data-carbon="protein"><i class="pv-sw" style="background:${proteinC}"></i><b>C</b><span class="mut">protein</span></li>` : '')
       + (lg ? lg.elements.map(el => `<li data-element="${esc(el)}"><i class="pv-sw" style="background:${ELEMENT[el] || '#FF1493'}"></i>${esc(el)}</li>`).join('') : '')
+      + (sasShown() ? `<li data-legend-sas title="P2Rank's solvent accessible surface points, coloured by P2Rank's score (green low, red high); the points of the pockets drawn larger">`
+        + `<span class="pv-sw-sas">${SAS_SWATCH.map(c => `<i style="background:${c}"></i>`).join('')}</span>SAS points<span class="mut">· P2Rank score</span></li>` : '')
       + `<li><span>${POCKET_COLORS.map(c => `<i class="pv-sw-pk" style="background:${c}"></i>`).join('')}</span>pocket surface</li>`;
     const typeList = types.length ? `<ul class="pv-types" aria-label="Interactions">${types.map(([t, c]) => {
       const off = lg.hidden.includes(t), n = lg.counts[t] || 0, atoms = lg.atomCounts[t] || 0;
@@ -296,11 +372,23 @@
       return `<li><button type="button" data-act="type" data-v="${esc(t)}" aria-pressed="${!off}" title="${esc(tip)}" data-interaction="${esc(t)}">`
         + `${off ? ICON.eyeOff : ICON.eye}<i class="pv-dash" style="border-top-color:${c}"></i><span>${esc(t)}${off ? '' : `<span class="mut"> · ${n} ${n === 1 ? 'residue' : 'residues'}</span>`}</span></button></li>`;
     }).join('')}</ul>` : '';
-    set($('pv-overlay'), `<details class="pv-legend" data-legend${S.legendOpen ? ' open' : ''}><summary>Legend <span class="pv-chev">${ICON.down}</span></summary>`
-      + `<div class="pv-legend-body"><ul aria-label="Colours">${colours}</ul>${typeList}</div></details>`
-      + `<div class="pv-styles" role="group" aria-label="Protein style in 3D">${STYLES.map(([v, label, tip]) =>
-        `<button type="button" class="tag" data-act="style" data-v="${v}" aria-pressed="${S.pstyle === v}" title="${esc(tip)}">${label}</button>`).join('')}</div>`);
+    set($('pv-legend-slot'), `<details class="pv-legend" data-legend${S.legendOpen ? ' open' : ''}><summary>Legend <span class="pv-chev">${ICON.down}</span></summary>`
+      + `<div class="pv-legend-body"><ul aria-label="Colours">${colours}</ul>${typeList}</div></details>`);
+    // the bar, in the legend's style: Protein (an eye), its style as a small menu that opens upwards (✓ the current one; dimmed while the
+    // protein is hidden: a pick shows it again), and with a pose Ligand (an eye)
+    const prot = !S.protHidden, lig = !S.ligHidden, cur = STYLES.find(([v]) => v === S.pstyle) || STYLES[0];
+    const bar = `<div class="pv-bar" role="group" aria-label="Shown in 3D" data-shown-bar>`
+      + `<button type="button" data-act="protein-shown" aria-pressed="${prot}" title="${prot ? 'Hide' : 'Show'} the protein in 3D">${prot ? ICON.eye : ICON.eyeOff}Protein</button>`
+      + `<details class="pv-menu" data-style-menu><summary aria-label="Protein style: ${cur[1]}" title="The protein's style in 3D" data-style-current="${cur[0]}"${prot ? '' : ' data-dim'}>`
+      + `${cur[1]}<span class="pv-chev">${ICON.down}</span></summary><div class="pv-menu-list" role="menu" aria-label="Protein style">${STYLES.map(([v, label, tip]) =>
+        `<button type="button" role="menuitemradio" aria-checked="${S.pstyle === v}" data-act="style" data-v="${v}" title="${esc(tip)}">${ICON.check}${label}</button>`).join('')}</div></details>`
+      + (S.row ? `<span class="pv-bar-sep" aria-hidden="true"></span><button type="button" data-act="ligand-shown" aria-pressed="${lig}"`
+        + ` title="${lig ? 'Hide' : 'Show'} the ligand in 3D (with its interaction lines, residue sticks and labels)">${lig ? ICON.eye : ICON.eyeOff}Ligand</button>` : '')
+      + `</div>`;
+    setKeep($('pv-bar-slot'), bar);
   }
+  const closeMenu = (menu, focus) => { menu.open = false; if (focus) { const s = menu.querySelector('summary'); if (s) s.focus({ preventScroll: true }); } };
+  const openMenu = () => root.querySelector('details[data-style-menu][open]');
   function renderChips() {
     const P = S.prot, r = S.row;
     const chips = P.docked.map(k => {
@@ -311,7 +399,13 @@
       return `<button type="button" class="tag" data-act="chip" data-v="${k}" aria-pressed="${on}" data-surface="${on ? 'on' : 'off'}" data-current="${!!(r && k === S.pk)}"`
         + ` style="--pk:${pocketColor(k)}" title="${esc(tip)}"${star ? ' data-best' : ''}><i class="dot" style="background:${pocketColor(k)}"></i>${k}</button>`;
     }).join('');
-    set($('pv-chips'), `<span class="pv-label">Pockets</span><div class="pv-chips-list" role="group" aria-label="Pockets" style="display:flex;flex-wrap:wrap;gap:8px">${chips}</div>`
+    // the SAS toggle first (the site's round 14r): P2Rank's SAS points in 3D, in any protein style; off at first
+    const sas = sasStatus(P), sasOn = S.sasOn && sas === 'ready';
+    const sasTip = sas === 'none' ? 'No SAS points for this protein' : sas === 'error' ? 'The SAS points could not be loaded'
+      : `${sasOn ? 'Hide' : 'Show'} P2Rank's solvent accessible surface (SAS) points in 3D`;
+    setKeep($('pv-chips'), `<span class="pv-label">Pockets</span><button type="button" class="tag" data-act="sas" aria-pressed="${sasOn}" data-sas="${sas}"`
+      + `${sas === 'none' ? ' disabled' : ''} title="${esc(sasTip)}">SAS</button>`
+      + `<div class="pv-chips-list" role="group" aria-label="Pockets" style="display:flex;flex-wrap:wrap;gap:8px">${chips}</div>`
       + `<div class="pv-actions"><button type="button" class="btn" data-act="reset" title="The selection's pocket surfaces, no focus, the whole view">Reset view</button>`
       + `<button type="button" class="btn" data-act="image" data-save-image${S.drawn && !S.imageBusy ? '' : ' disabled'} title="A PNG of exactly this view">${S.imageBusy ? 'Saving…' : 'Save image'}</button>`
       + `<select data-act="img-scale" aria-label="Image size" title="Image size: 2 or 4 times the view">${[2, 4].map(k => `<option value="${k}"${S.imgScale === k ? ' selected' : ''}>${k}×</option>`).join('')}</select>`
@@ -520,7 +614,15 @@
       else { S.focusRes = { chain, seq: Number(seq) }; update(true); }
     }
     else if (a === 'type') { S.hidden = S.hidden.includes(v) ? S.hidden.filter(x => x !== v) : [...S.hidden, v]; update(); }
-    else if (a === 'style') { S.pstyle = v; update(); }
+    // the bar: a style picked closes the menu (the focus on it) and shows the protein again; Protein and Ligand show or hide them
+    else if (a === 'style') {
+      const m = t.closest('details'); if (m) m.open = false;
+      S.pstyle = v; S.protHidden = false; update();
+      if (m) closeMenu($('pv-bar-slot').querySelector('details[data-style-menu]'), true);
+    }
+    else if (a === 'protein-shown') { S.protHidden = !S.protHidden; update(); }
+    else if (a === 'ligand-shown') { S.ligHidden = !S.ligHidden; update(); }
+    else if (a === 'sas') toggleSas();
     else if (a === 'reset') reset();
     else if (a === 'image') saveImage();
     else if (a === 'save-sdf' && S.row && S.row.sdf) saveText(S.row.sdf, `${pairStem()}_top.sdf`, 'chemical/x-mdl-sdfile');
@@ -553,6 +655,23 @@
   root.addEventListener('toggle', e => { if (e.target.matches && e.target.matches('details.pv-legend')) S.legendOpen = e.target.open; }, true);
   // one panel of the protein's information open at a time
   root.addEventListener('toggle', e => { if (e.target.matches && e.target.matches('details.pv-pop') && e.target.open) root.querySelectorAll('details.pv-pop[open]').forEach(d => { if (d !== e.target) d.open = false; }); }, true);
+  // the protein's style menu (the site's round 14t): while it is open, Escape closes it, the up and down arrows move in its list and the
+  // left and right arrows do not step the modes; closed, the keys go on to the page. It closes on a click outside, when the focus leaves
+  // it, and when the page loses the focus (a click or drag in the 3D view)
+  root.addEventListener('keydown', e => {
+    const menu = e.target && e.target.closest ? e.target.closest('details[data-style-menu]') : null;
+    if (!menu || !menu.open) return;
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMenu(menu, true); }
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') e.stopPropagation();
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault(); e.stopPropagation();
+      const items = [...menu.querySelectorAll('[role=menuitemradio]')], i = items.indexOf(document.activeElement), n = items.length, down = e.key === 'ArrowDown';
+      items[i < 0 ? (down ? 0 : n - 1) : (i + (down ? 1 : n - 1)) % n].focus();
+    }
+  });
+  document.addEventListener('pointerdown', e => { const m = openMenu(); if (m && !m.contains(e.target)) m.open = false; }, true);
+  root.addEventListener('focusout', e => { const m = openMenu(); if (m && e.relatedTarget && !m.contains(e.relatedTarget)) m.open = false; });
+  window.addEventListener('blur', () => { const m = openMenu(); if (m) m.open = false; });
   // a click outside the saved image closes it; a click or tap on the toast hides it (on a phone it covers the page's bottom)
   root.addEventListener('click', e => { if (e.target.id === 'pv-shot') closeShot(); else if (e.target.id === 'pv-toast') hideToast(); });
   // the arrow keys step through the modes, but not in a form field or the Python lines (there they scroll); Escape also works from the lines
@@ -561,7 +680,7 @@
     if (e.target && e.target.closest && e.target.closest(skip)) return;
     if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && S.row) { e.preventDefault(); step(e.key === 'ArrowLeft' ? -1 : 1); }
     else if (e.key === 'Escape') {
-      const pop = root.querySelector('details.pv-pop[open]');
+      const pop = root.querySelector('details.pv-pop[open], details[data-style-menu][open]');   // also the style menu, open by a click
       if (!$('pv-shot').hidden) closeShot(); else if (pop) pop.open = false; else if (S.focus3d.active) clearFocus3d();
     }
   });
@@ -569,6 +688,7 @@
   window.__pvState = () => ({
     protein: S.prot && S.prot.id, ligand: S.row ? ligOf(S.row).id : null, view: S.view, pocket: S.pk, mode: S.mode, allModes: S.allModes,
     show: S.show.slice(), surfaces: S.surfaces.slice(), tab: S.tab, hidden: S.hidden.slice(), style: S.pstyle, theme: S.theme,
+    proteinHidden: S.protHidden, ligandHidden: S.ligHidden, sas: { on: S.sasOn, status: S.prot ? sasStatus(S.prot) : null, shown: !!(S.prot && sasShown()) },
     focus: { ...S.focus3d }, focusPocket: S.focusPocket, focusResidue: S.focusRes, drawn: S.drawn, status: S.status,
     contacts: S.contactsAll && S.contactsAll.key === poseKey() ? S.contactsAll.contacts.length : null, poseName: S.row ? poseName() : null,
     imageName: imageName(), proteins: D.proteins.map(p => p.id),

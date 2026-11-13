@@ -2,13 +2,13 @@
 
 ## Supported versions
 
-Only the latest 0.3.x release gets security fixes. A fix comes out as a new release, and older versions are not
+Only the latest 0.4.x release gets security fixes. A fix comes out as a new release, and older versions are not
 patched, so please update first and check whether the problem is still there. `pocketvina --version` shows the
 version you have.
 
 | Version                | Supported |
 | ---------------------- | --------- |
-| Latest 0.3.x release   | Yes       |
+| Latest 0.4.x release   | Yes       |
 | Older releases         | No        |
 
 ## Reporting a vulnerability

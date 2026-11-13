@@ -20,7 +20,7 @@ from rdkit import Chem
 
 from pocketvina import pdbqt, workspace
 from pocketvina.atlas import MAX_LIGANDS, NON_DRUG, TOP_HITS, Atlas, _across, _pb
-from pocketvina.io import posefile
+from pocketvina.io import posefile, sas
 from pocketvina.selection import Selection, pose_name
 
 ABL1 = "P00519"
@@ -258,6 +258,8 @@ def test_show_page_data(atlas, atlas_dir, tmp_path, monkeypatch, capsys):
     assert [item["lig"] for item in prot["rows"]] == [row["cidx"] for row in hits]
     assert prot["docked"] == [1, 2, 3, 4, 5]
     assert [p["plddt"] for p in prot["pockets"]] == [round(p["plddt"], 1) for p in raw["pockets"]]
+    points = sas.decode((atlas_dir / "sas" / f"{ABL1}.json.gz").read_bytes())  # P2Rank's SAS points, without the id
+    assert prot["sas"] == {k: points[k] for k in ("pockets", "other_pockets", "rest")} and prot["sas"]["pockets"]
     assert data["initial"] == {"protein": ABL1, "ligand": None, "view": "best", "pocket": None, "mode": None,
                                "allModes": False, "show": [1, 2, 3, 4, 5], "userShow": False, "tab": "top"}
     checks = atlas.meta["pb_checks"]
@@ -449,6 +451,7 @@ def test_results_pages_have_no_atlas_fields(real_run, tmp_path):
         data = workspace.workspace_data(res)
     assert "info" not in data["proteins"][0] and all("plddt" not in p for p in data["proteins"][0]["pockets"])
     assert "topNote" not in data["proteins"][0] and all(r["rank"] >= 1 for r in data["proteins"][0]["rows"])
+    assert "sas" not in data["proteins"][0]  # imported results have no SAS points
     assert all("ids" not in lig for lig in data["ligands"].values())
     assert {"allow-popups", "allow-popups-to-escape-sandbox"} <= set(workspace.SANDBOX.split())
     assert "allow-same-origin" not in workspace.SANDBOX

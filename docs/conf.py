@@ -79,7 +79,7 @@ pygments_dark_style = "github-dark"
 FIELD_DOCSTRINGS = {
     "pocketvina.main.PocketVinaConfig",
     *(f"pocketvina.main.PocketVinaGPU.{m}" for m in ("best_scores", "select", "show")),
-    *(f"pocketvina.io.results.Results.{m}" for m in ("best_scores", "select", "show")),
+    *(f"pocketvina.io.results.Results.{m}" for m in ("best_scores", "select", "show", "sas")),
     *(f"pocketvina.selection.Selection.{m}" for m in ("show", "bust", "export", "export_protein")),
     "pocketvina.atlas.Atlas",
     *(f"pocketvina.atlas.Atlas.{m}" for m in ("protein", "search", "drug", "best_scores", "select", "show",

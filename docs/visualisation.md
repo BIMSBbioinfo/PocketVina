@@ -54,6 +54,8 @@ printed. The page contains all its data and works offline.
 | Part | What it shows |
 | --- | --- |
 | 3D view | the protein, the pocket surfaces, the pose, the residues within 4 Å and their contacts with the ligand |
+| Protein, Ligand | under the legend: hide or show the protein or the ligand, and choose the protein's style |
+| SAS | P2Rank's solvent accessible surface points, coloured by score from green (0) to red (0.7), larger in the pockets. Greyed out for a protein without them (older results, pockets from a CSV file) |
 | Pocket chips | the docked pockets. Click one to show its surface and its pose |
 | Mode bar | the poses of a pocket with their Vina scores. The arrow keys step through them |
 | Save image | a PNG of the current view, 2 or 4 times larger |

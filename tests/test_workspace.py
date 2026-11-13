@@ -225,6 +225,20 @@ def test_data_of_several_proteins_with_posebusters_only_where_checked(two):
     assert set(extra["ligands"]) == {"0", "1"}
 
 
+def test_data_has_the_sas_points_where_the_results_have_them(two, monkeypatch):
+    """A protein's SAS points (Results.sas) are in its data as "sas", without the protein's id; a protein without
+    them has no "sas" (these imported results have none; the docking run's: test_pipeline)."""
+    assert all("sas" not in p for p in workspace.workspace_data(two)["proteins"])
+    points = {"protein": PID, "pockets": {"1": [[1.25, -2.5, 3.75, 0.5]]},
+              "other_pockets": {"3": [[1.2, 2.5, 3.8, 0.3]]}, "rest": [[0.1, 0.2, 0.3, 0.01]]}
+    monkeypatch.setattr(Results, "sas", lambda self, protein: points if protein == PID else None)
+    data = workspace.workspace_data(two)
+    by_id = {p["id"]: p for p in data["proteins"]}
+    assert by_id[PID]["sas"] == {k: points[k] for k in ("pockets", "other_pockets", "rest")}
+    assert "sas" not in by_id[PID2]
+    assert workspace.page_payload(workspace.workspace_html(data)) == data  # packed with the rest
+
+
 def test_listed_pairs_as_before_without_reading_every_pair(three, monkeypatch):
     """The pairs each protein lists, with the same numbers (rank on the protein, Across proteins, ligands with a pose,
     Vina score, pocket, mode, ligand efficiency, pockets with a pose) as when workspace_data read every pair of the run
@@ -483,6 +497,136 @@ def test_toast_hides_on_a_tap():
     assert re.search(r"\.pv-toast \{[^}]*cursor: pointer; \}", css)
 
 
+def test_sas_toggle_draws_p2ranks_points():
+    """The SAS toggle (as on the PocketVina Atlas site): first in the Pockets row, off at first, aria-pressed; greyed
+    out without points (older results, pockets from a CSV), and it says so when they cannot be read or drawn. Switched
+    on, the protein's points (its "sas" field) are read once into flat lists and go to the 3D view with each spec; the
+    legend shows their colour scale. viewer.js draws them as the site does: two structures (the points of every pocket,
+    the rest), spheres of 0.48 and 0.24 A, coloured by P2Rank's score from green (0) to red (0.7), no hover or pick,
+    and the camera stays where it is."""
+    js = (VIEWER / "workspace.js").read_text(encoding="utf-8")
+    for part in ("sasOn: false,",
+                 "const sasStatus = P => (!sasSize(P) ? 'none' : sasErr.has(P.id) ? 'error' : 'ready');",
+                 "const sasTip = sas === 'none' ? 'No SAS points for this protein' : sas === 'error' ? "
+                 "'The SAS points could not be loaded'",
+                 ": `${sasOn ? 'Hide' : 'Show'} P2Rank's solvent accessible surface (SAS) points in 3D`;",
+                 # first in the row, before the chips
+                 "`<span class=\"pv-label\">Pockets</span><button type=\"button\" class=\"tag\" data-act=\"sas\" "
+                 "aria-pressed=\"${sasOn}\" data-sas=\"${sas}\"`",
+                 "+ `${sas === 'none' ? ' disabled' : ''} title=\"${esc(sasTip)}\">SAS</button>`",
+                 "else if (a === 'sas') toggleSas();",
+                 # in the spec only the protein's key (lastSpec stays small); the points go with each message
+                 "sas: sasShown() ? P.key : null,",
+                 "toFrame({ type: 'show', spec: s.sas ? { ...s, sas: { protein: s.sas, ...sasPoints(S.prot) } } "
+                 ": s });",
+                 "sasLists.set(P.id, { pockets, others: flat(...Object.values(s.other_pockets || {})), "
+                 "rest: flat(s.rest) });",
+                 "case 'sas': { const P = D.proteins.find(p => p.key === m.protein); if (P && m.error) { "
+                 "sasErr.add(P.id);",
+                 # the legend: the colour scale, no numbers
+                 "const SAS_SWATCH = ['#00FF00', '#55AA00', '#AA5500', '#FF0000'];",
+                 "SAS points<span class=\"mut\">· P2Rank score</span></li>"):
+        assert part in js, part
+    assert js.index('data-act="sas"') < js.index('<div class="pv-chips-list"')
+    viewer = (VIEWER / "viewer.js").read_text(encoding="utf-8")
+    for part in ("const SAS_MAX = 200000, SAS_RADIUS = { pockets: 0.48, rest: 0.24 }, "
+                 "SAS_SCALE = [0xff0000, 0x00ff00], SAS_SCORE_MAX = 0.7;",
+                 "typeParams: { visuals: ['element-sphere'], sizeFactor: 1, ignoreHydrogens: false, "
+                 "...(part === 'pockets' ? { alpha: 0.9 } : {}) },",
+                 "color: 'uncertainty', colorParams: { domain: [0, SAS_SCORE_MAX], list: { kind: 'interpolate', "
+                 "colors: SAS_SCALE } },",
+                 "size: 'uniform', sizeParams: { value: SAS_RADIUS[part] } }, `pv-sas-points:${part}`);",
+                 "c.obj.data.repr.setState({ markerActions: 0, pickable: false });",
+                 # a point a PDB line cannot hold is left out; every pocket rank, the other pockets' points with them
+                 "if (Math.abs(a[i]) < 1000 && Math.abs(a[i + 1]) < 1000 && Math.abs(a[i + 2]) < 1000)",
+                 "r >= 1 && r <= MAX_POCKETS && okNumbers(v)) keep(pockets, v); }",
+                 "if (okNumbers(x.others || [])) keep(pockets, x.others || []);",
+                 "if (total / 4 > SAS_MAX) throw new Error(",
+                 # the camera stays: no reset while the points come or go, then its depth range follows the scene
+                 "try { await rebuildSas(spec, key, cells); if (c3) c3.commit(true); } finally {",
+                 "const specKey = spec => JSON.stringify({ ...spec, showPockets: null, proteinStyle: null, sas: null, "
+                 "hideLigand: null });"):
+        assert part in viewer, part
+    sync = viewer[viewer.index("async function syncSas(spec)"):viewer.index("async function rebuildSas(")]
+    assert "c3.setProps({ camera: { manualReset: true } });" in sync and "radiusMax: c3.boundingSphere.radius" in sync
+    css = (VIEWER / "workspace.css").read_text(encoding="utf-8")
+    assert ".pv-sw-sas i { display: inline-block; width: 6px; height: 6px; }" in css
+
+
+def test_bar_shows_or_hides_the_protein_and_the_ligand():
+    """Under the legend, at the very bottom of the 3D view, one bar in the legend's style replaces the protein's
+    style buttons: Protein (an eye), the protein's style as a small menu that opens upwards (Cartoon, Surface, Sticks,
+    a tick on the current one; its label dimmed while the protein is hidden, and a pick shows the protein again), and
+    with a pose Ligand (an eye; its interaction lines, residue sticks and labels go with it). Both are on at first, and
+    a hidden ligand stays hidden on another mode, pocket or ligand. The menu works from the keyboard (Escape, the up and
+    down arrows; the left and right arrows do not step the modes while it is open) and closes when the focus leaves."""
+    js = (VIEWER / "workspace.js").read_text(encoding="utf-8")
+    for part in ("protHidden: false, ligHidden: false,",
+                 "proteinStyle: S.protHidden ? 'none' : S.pstyle,",
+                 "hideLigand: !!(S.ligHidden && S.row) };",
+                 '`<div class="pv-bar" role="group" aria-label="Shown in 3D" data-shown-bar>`',
+                 '`<button type="button" data-act="protein-shown" aria-pressed="${prot}" title="${prot ? \'Hide\' : '
+                 '\'Show\'} the protein in 3D">${prot ? ICON.eye : ICON.eyeOff}Protein</button>`',
+                 '`<details class="pv-menu" data-style-menu><summary aria-label="Protein style: ${cur[1]}" '
+                 'title="The protein\'s style in 3D" data-style-current="${cur[0]}"${prot ? \'\' : \' data-dim\'}>`',
+                 '<div class="pv-menu-list" role="menu" aria-label="Protein style">',
+                 '`<button type="button" role="menuitemradio" aria-checked="${S.pstyle === v}" data-act="style" '
+                 'data-v="${v}" title="${esc(tip)}">${ICON.check}${label}</button>`',
+                 "+ (S.row ? `<span class=\"pv-bar-sep\" aria-hidden=\"true\"></span><button type=\"button\" "
+                 "data-act=\"ligand-shown\" aria-pressed=\"${lig}\"`",
+                 "+ ` title=\"${lig ? 'Hide' : 'Show'} the ligand in 3D (with its interaction lines, residue sticks "
+                 "and labels)\">${lig ? ICON.eye : ICON.eyeOff}Ligand</button>` : '')",
+                 "S.pstyle = v; S.protHidden = false; update();",
+                 "else if (a === 'protein-shown') { S.protHidden = !S.protHidden; update(); }",
+                 "else if (a === 'ligand-shown') { S.ligHidden = !S.ligHidden; update(); }",
+                 # the menu's keys only while it is open; closed, the keys go on to the page
+                 "if (!menu || !menu.open) return;",
+                 "if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMenu(menu, true); }",
+                 "else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') e.stopPropagation();",
+                 "items[i < 0 ? (down ? 0 : n - 1) : (i + (down ? 1 : n - 1)) % n].focus();",
+                 "root.addEventListener('focusout', e => { const m = openMenu(); if (m && e.relatedTarget && "
+                 "!m.contains(e.relatedTarget)) m.open = false; });",
+                 "window.addEventListener('blur', () => { const m = openMenu(); if (m) m.open = false; });",
+                 # the legend shows what is drawn; legend and bar each in a slot; the bar keeps the focus when drawn
+                 "const ligShown = !!S.row && !S.ligHidden, lg = ligShown && S.contacts",
+                 "+ (!S.protHidden || ligShown ? `<li data-carbon=\"protein\">",
+                 '<div class="pv-slot" id="pv-legend-slot"></div><div class="pv-slot" id="pv-bar-slot"></div>',
+                 "setKeep($('pv-bar-slot'), bar);",
+                 "const a = document.hasFocus() ? document.activeElement : null, v = a && a.dataset ? a.dataset.v "
+                 ": null;"):
+        assert part in js, part
+    assert "pv-styles" not in js and 'aria-label="Protein style in 3D"' not in js  # one style control, not two
+    assert js.index('<div class="pv-slot" id="pv-legend-slot">') < js.index('id="pv-bar-slot"')  # Tab: legend, then bar
+    css = (VIEWER / "workspace.css").read_text(encoding="utf-8")
+    assert "pv-styles" not in css
+    for part in ("display: flex; flex-direction: column;\n  justify-content: flex-end;",  # the bar at the very bottom
+                 ".pv-slot { display: contents; }",
+                 ".pv-menu > summary[data-dim] { opacity: .6; }",  # the label only: the open list stays opaque
+                 ".pv-menu-list { position: absolute; left: 0; bottom: calc(100% + 4px);",  # opens upwards
+                 ".pv-menu-list button[aria-checked=false] svg { visibility: hidden; }",
+                 ".pv-bar > button[aria-pressed=false] { color: var(--mut); }",
+                 "@container (max-width: 680px) {"):
+        assert part in css, part
+    viewer = (VIEWER / "viewer.js").read_text(encoding="utf-8")
+    for part in ("const STYLES = ['cartoon', 'surface', 'sticks', 'none'];",
+                 "if (style === 'none') { if (!hidden) S.updateCellState(prot.polyRepr, { isHidden: true }); }",
+                 "const LIGAND_TAG = t => t === 'pv-lig-repr' || t === 'pv-interactions' || t === 'pv-line' || "
+                 "t.startsWith('pv-mode-repr:');",
+                 "ligandHidden = !!spec.hideLigand;",  # a drawing (a new mode, pocket or ligand) keeps it hidden
+                 "if (ligandHidden) { hidePoseCells(true); await removeResidues(); }",
+                 "{ tag: 'pv-interactions', initialState: { isHidden: ligandHidden } });",
+                 # made hidden (no frame shows them); kept ones hidden or shown again; also with a theme change
+                 "'pv-lig-repr', ligandHidden ? { isHidden: true } : null);",
+                 "`pv-mode-repr:${i}`,\n          ligandHidden ? { isHidden: true } : null);",
+                 "hidePoseCells(ligandHidden);",
+                 "if (recolourOnly) { await recolor(spec); await applyStyle(spec); await setLigandHidden(spec); }"):
+        assert part in viewer, part
+    draw = viewer[viewer.index("async function draw(spec, since)"):]
+    order = ("ligandHidden = !!spec.hideLigand;", "await syncSite(spec, lig, hiddenTypes(spec));",
+             "hidePoseCells(ligandHidden);")
+    assert [draw.index(part) for part in order] == sorted(draw.index(part) for part in order)
+
+
 def test_raw_text_check():
     assert workspace._raw_text("a < b && c > d", "x.js") == "a < b && c > d"
     for text, what in (("x = '</script>'", "x.js"), ("<!-- y", "x.js"), ("a{} </style>", "x.css")):
@@ -626,7 +770,7 @@ def test_viewer_changes_are_marked():
     old = (VIEWER / "upstream" / "viewer.js").read_text(encoding="utf-8").splitlines()
     new = (VIEWER / "viewer.js").read_text(encoding="utf-8").splitlines()
     blocks = [op for op in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes() if op[0] != "equal"]
-    assert 8 <= len(blocks) <= 20
+    assert 8 <= len(blocks) <= 30
     for tag, i1, i2, j1, j2 in blocks:
         near = new[max(0, j1 - 3):j2 + 1]
         assert any("PocketVina:" in line for line in near), (tag, old[i1:i2], new[j1:j2])

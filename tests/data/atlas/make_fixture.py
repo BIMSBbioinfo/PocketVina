@@ -28,6 +28,9 @@ Every file keeps the layout of the release, so the package reads the fixture exa
   structures/<af_id>.pdb.gz     copied
   poses/<U>.poses               rewritten with posefile.Writer: same N, K and meta, only the fixture's records
   poses_redock/<U>.poses        (the others are empty), so every record index of the release stays valid
+  sas/<U>.json.gz               P2Rank's SAS points: every point of a pocket, every SAS_REST_STEP-th point in no pocket
+  sas/MANIFEST.json             {"<U>.json.gz": [sha256, bytes]} of these files; as in the release, MANIFEST.json does
+                                not list sas/
 """
 import gzip
 import hashlib
@@ -56,6 +59,7 @@ ACC = re.compile(r"^([OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9]([A-Z][A-Z0-9]{2}[0
 WORDS = re.compile(r"[\s,;()\[\]/]+")
 TABLES = {"compound_entries": "catalog_id", "compound_entries_annotated": "catalog_id", "compounds": "pvl_id",
           "proteins": "uniprot"}
+SAS_REST_STEP = 20  # sas/: of the points in no pocket ("rest"), every 20th is kept
 
 
 def read_json(path):
@@ -214,6 +218,7 @@ def build(release):
     cidx = read_json(os.path.join(release, "cidx.json"))
     write_json("cidx.json", dict(cidx, cidx={c: v for c, v in sorted(cidx["cidx"].items()) if c in cats}))
     tables(release, cats, pvls)
+    sas(release)
     write_json("meta.json", dict(meta, subset=SUBSET))
     manifest(meta)
 
@@ -280,14 +285,29 @@ def tables(release, cats, pvls):
         print(f"tables/{name}.parquet: {rows.num_rows} rows, {os.path.getsize(path)} bytes")
 
 
+def sas(release):
+    """sas/<U>.json.gz of the fixture's proteins (the release's, with every SAS_REST_STEP-th point of "rest") and
+    sas/MANIFEST.json, written as the release writes them (JSON with indent 0)."""
+    listed = {}
+    for uniprot in PROTEINS:
+        data = read_json(os.path.join(release, "sas", f"{uniprot}.json.gz"))
+        data["rest"] = data["rest"][::SAS_REST_STEP]
+        with open(write_json(f"sas/{uniprot}.json.gz", data), "rb") as f:
+            raw = f.read()
+        listed[f"{uniprot}.json.gz"] = [hashlib.sha256(raw).hexdigest(), len(raw)]
+        print(f"sas/{uniprot}.json.gz: {sum(len(v) for v in data['pockets'].values())} points in the docked pockets, "
+              f"{len(data['rest'])} in no pocket, {len(raw)} bytes")
+    write("sas/MANIFEST.json", json.dumps(dict(sorted(listed.items())), indent=0).encode("utf-8"))
+
+
 def manifest(meta):
-    """MANIFEST.json of the fixture: every file written, with its bytes and sha256."""
+    """MANIFEST.json of the fixture: every file written but sas/ (as in the release), with its bytes and sha256."""
     files = {}
     for folder, _, names in os.walk(OUT):
         for name in names:
             path = os.path.join(folder, name)
             rel = os.path.relpath(path, OUT).replace(os.sep, "/")
-            if rel in ("MANIFEST.json",):
+            if rel in ("MANIFEST.json",) or rel.startswith("sas/"):
                 continue
             with open(path, "rb") as f:
                 data = f.read()

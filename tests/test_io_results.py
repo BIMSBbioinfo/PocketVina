@@ -18,7 +18,7 @@ from rdkit import Chem
 import fake_engine as fe
 from pocketvina import convert, pdbqt
 from pocketvina.io import results as results_mod
-from pocketvina.io import tables
+from pocketvina.io import sas, tables
 from pocketvina.io.importer import import_legacy
 from pocketvina.io.results import COMBINED_COLUMNS, Results, short_floats
 from pocketvina.io.writer import ProteinWriter, ResultsDir
@@ -196,6 +196,31 @@ def test_structure_fallback_and_missing(res_copy, real_run):
     plain.unlink()
     with pytest.raises(FileNotFoundError):
         res_copy.structure(PID)
+
+
+def test_sas(res_copy, caplog):
+    """Results.sas: None for results without SAS points (here imported from a legacy run), also when a file is there
+    that the protein's manifest does not list (left by an earlier run of the protein); the points of a listed file;
+    None and a warning for a damaged one. Docking runs write it: test_pipeline."""
+    assert res_copy.sas(PID) is None
+    data = {"protein": PID, "pockets": {"1": [[1.25, -2.5, 3.75, 0.5]]}, "other_pockets": {"3": [[1.2, 2.5, 3.8, 0.3]]},
+            "rest": [[0.1, 0.2, 0.3, 0.01]]}
+    path = Path(res_copy.path, "sas", f"{PID}.json.gz")
+    path.parent.mkdir()
+    path.write_bytes(sas.encode(data))
+    assert res_copy.sas(PID) is None
+    manifest_file = Path(res_copy.path, "manifest", f"{PID}.json")
+    manifest = json.loads(manifest_file.read_text())
+    raw = path.read_bytes()
+    manifest["files"][f"sas/{PID}.json.gz"] = {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+    manifest_file.write_text(json.dumps(manifest))
+    assert res_copy.sas(PID) == data
+    path.write_bytes(raw[:len(raw) // 2])
+    with caplog.at_level(logging.WARNING, logger="pocketvina.io.results"):
+        assert res_copy.sas(PID) is None
+    assert f"{PID}: cannot read the SAS points" in caplog.text
+    with pytest.raises(KeyError, match="not in"):
+        res_copy.sas("1fbl")
 
 
 # --- DuckDB --------------------------------------------------------------------------------------------------------

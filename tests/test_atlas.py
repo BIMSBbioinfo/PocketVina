@@ -12,6 +12,7 @@ One test is marked ``network``: it reads the public Atlas over the internet and 
 import gzip
 import hashlib
 import json
+import logging
 import os
 import shlex
 import shutil
@@ -23,9 +24,9 @@ import pandas as pd
 import pytest
 from click.testing import CliRunner
 
-from pocketvina import cli, selection
+from pocketvina import cli, selection, workspace
 from pocketvina.atlas import ATLAS_URL, BEST_SCORES_COLUMNS, SEARCH_COLUMNS, SEARCH_TOP, Atlas, _Drugs
-from pocketvina.io import atlas_source, posefile
+from pocketvina.io import atlas_source, posefile, sas
 from pocketvina.io.atlas_source import Source, pair_blocks, pose_records, top_record
 
 ABL1 = "P00519"
@@ -55,16 +56,22 @@ def remote(atlas_server) -> Source:
 
 
 def test_fixture_is_small_and_listed(atlas_dir):
-    """The fixture stays under 3 MB, and its MANIFEST.json lists every other file with its size and sha256."""
-    import hashlib
-
+    """The fixture stays under 3 MB, and its MANIFEST.json lists every other file with its size and sha256, but sas/
+    (as the release's MANIFEST.json): sas/MANIFEST.json lists those."""
     files = {p.relative_to(atlas_dir).as_posix(): p for p in atlas_dir.rglob("*") if p.is_file()}
     assert sum(p.stat().st_size for p in files.values()) < 3 * 1024 * 1024
     listed = json.loads((atlas_dir / "MANIFEST.json").read_text())["files"]
-    assert set(listed) == set(files) - {"MANIFEST.json"}
+    sas_files = {rel for rel in files if rel.startswith("sas/")}
+    assert set(listed) == set(files) - {"MANIFEST.json"} - sas_files
     for rel, entry in listed.items():
         data = files[rel].read_bytes()
         assert entry == {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}, rel
+    sas_listed = json.loads((atlas_dir / "sas" / "MANIFEST.json").read_text())
+    assert {f"sas/{name}" for name in sas_listed} == sas_files - {"sas/MANIFEST.json"} == {
+        f"sas/{uniprot}.json.gz" for uniprot in PROTEINS}
+    for name, entry in sas_listed.items():
+        data = files[f"sas/{name}"].read_bytes()
+        assert entry == [hashlib.sha256(data).hexdigest(), len(data)], name
     meta = json.loads((atlas_dir / "meta.json").read_text())
     assert meta["subset"] and meta["release"]["status"] == "final"
 
@@ -118,6 +125,27 @@ def test_source_file_local(local, atlas_dir):
     assert local.file("meta.json") == str(atlas_dir / "meta.json")
     with pytest.raises(FileNotFoundError, match="no file proteins/XXXXXX.json"):
         local.file("proteins/XXXXXX.json")
+
+
+def test_source_file_checked(atlas_dir, atlas_server, tmp_path, monkeypatch):
+    """Source.file(size=, sha256=): a file of a folder that differs raises ValueError; over HTTP a cached copy that
+    differs is fetched again, and a fetched one that differs is not kept."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    rel = f"sas/{ABL1}.json.gz"
+    data = (atlas_dir / rel).read_bytes()
+    right = {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    assert Source(atlas_dir).file(rel, **right) == str(atlas_dir / rel)
+    with pytest.raises(ValueError, match="is damaged"):
+        Source(atlas_dir).file(rel, size=len(data), sha256="0" * 64)
+    remote = Source(atlas_server.url)
+    path = Path(remote.file(rel, **right))
+    path.write_bytes(b"x" + data[1:])  # damaged in the cache
+    asked = len(atlas_server.requests)
+    assert remote.file(rel, **right) == str(path) and path.read_bytes() == data
+    assert [r for r, _ in atlas_server.requests[asked:]] == [rel]  # fetched again
+    with pytest.raises(ValueError, match="is damaged"):
+        remote.file(f"sas/{EGFR}.json.gz", sha256="0" * 64)
+    assert not path.with_name(f"{EGFR}.json.gz").exists() and not list(tmp_path.glob("**/*.tmp-*"))
 
 
 def test_source_file_http_is_cached(atlas_server, tmp_path, monkeypatch):
@@ -871,27 +899,35 @@ def _check_offline(out: Path, proteins, atlas_dir: Path):
         u for u in Atlas(atlas_dir).best_scores(ligand=DRUG)["protein_id"] if u in proteins]
     pair = sub.select(protein=ABL1, ligand=DRUG, pocket="all")
     assert len(pair.poses) == 5 and Path(pair.export_protein(out.parent / "protein.pdb")).is_file()
-    assert Path(sub.show(ABL1, path=out.parent / "page.html")).is_file()
+    page = Path(sub.show(ABL1, path=out.parent / "page.html")).read_text(encoding="utf-8")
+    for uniprot in proteins:  # P2Rank's SAS points, for the page's SAS toggle
+        assert sub._sas(uniprot) == sas.decode((atlas_dir / "sas" / f"{uniprot}.json.gz").read_bytes())
+    assert workspace.page_payload(page)["proteins"][0]["sas"]["pockets"]
     return sub
 
 
 def test_download_from_a_folder(atlas, atlas_dir, tmp_path, capsys):
     """A subset of two proteins: their files, every drug page, the search files, four tables and ligand_ids.json,
-    byte-identical to the release's; MANIFEST.json lists them all; meta.json says what the subset is."""
+    byte-identical to the release's; their SAS points with a sas/MANIFEST.json of their own; MANIFEST.json lists them
+    all; meta.json says what the subset is."""
     out = tmp_path / "my_atlas"
     assert atlas.download(proteins=["ABL1", "EGFR"], out=out) == str(out)
     line = capsys.readouterr().out
     assert "files" in line and "MB" in line and "2 proteins" in line and str(out) in line
     files, release = _tree(out), json.loads((atlas_dir / "MANIFEST.json").read_text())["files"]
-    for rel in set(files) - {"meta.json", "MANIFEST.json"}:
+    for rel in set(files) - {"meta.json", "MANIFEST.json", "sas/MANIFEST.json"}:
         assert files[rel].read_bytes() == (atlas_dir / rel).read_bytes(), rel
     expected = {f"{folder}/{uniprot}{ext}" for uniprot in (ABL1, EGFR) for folder, ext in (
-        ("proteins", ".json.gz"), ("salt_forms", ".json.gz"), ("poses", ".poses"), ("poses_redock", ".poses"))}
+        ("proteins", ".json.gz"), ("salt_forms", ".json.gz"), ("poses", ".poses"), ("poses_redock", ".poses"),
+        ("sas", ".json.gz"))}
     expected |= {f"structures/AF-{uniprot}-F1-model_v6.pdb.gz" for uniprot in (ABL1, EGFR)}
     expected |= {rel for rel in release if rel.startswith(("search/", "compounds/")) and ".all." not in rel}
     expected |= {f"tables/{name}.parquet" for name in ("compound_entries", "compound_entries_annotated", "compounds",
                                                        "proteins")}
-    assert set(files) == expected | {"ligand_ids.json", "meta.json", "MANIFEST.json"}
+    assert set(files) == expected | {"ligand_ids.json", "meta.json", "MANIFEST.json", "sas/MANIFEST.json"}
+    release_sas = json.loads((atlas_dir / "sas" / "MANIFEST.json").read_text())
+    assert json.loads(files["sas/MANIFEST.json"].read_text()) == {f"{u}.json.gz": release_sas[f"{u}.json.gz"]
+                                                                 for u in (ABL1, EGFR)}
     manifest = json.loads(files["MANIFEST.json"].read_text())
     assert set(manifest["files"]) == set(files) - {"MANIFEST.json"}
     for rel, entry in manifest["files"].items():
@@ -910,7 +946,7 @@ def test_download_over_http_then_offline(atlas_server, atlas_dir, tmp_path, monk
     out = tmp_path / "my_atlas"
     Atlas(atlas_server.url).download(["ABL1"], out)
     for rel, path in _tree(out).items():
-        if rel not in ("meta.json", "MANIFEST.json"):
+        if rel not in ("meta.json", "MANIFEST.json", "sas/MANIFEST.json"):
             assert path.read_bytes() == (atlas_dir / rel).read_bytes(), rel
     asked = len(atlas_server.requests)
     atlas_server.shutdown()
@@ -994,6 +1030,58 @@ def test_download_files_the_manifest_does_not_list(atlas_dir, tmp_path, http_ser
     shutil.rmtree(release / "salt_forms")
     out = Path(Atlas(release).download(["ABL1"], tmp_path / "out2"))
     assert not (out / "salt_forms").exists() and Atlas(out).select(ABL1, DRUG).ligand == DRUG
+
+
+@pytest.mark.parametrize("source", ["local", "remote"])
+def test_download_copies_the_sas_points(source, atlas_dir, tmp_path, http_server, monkeypatch, caplog):
+    """P2Rank's SAS points of the proteins (sas/<U>.json.gz, checked by sha256 against sas/MANIFEST.json) go into the
+    folder with a sas/MANIFEST.json of its proteins, so its pages have the SAS toggle, as does a download of the
+    download. A release without sas/ is downloaded without them; a damaged SAS file stops the download, as any other."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    location = release if source == "local" else http_server(release).url
+    out = Path(Atlas(location).download(["ABL1"], tmp_path / "out"))
+    again = Path(Atlas(out).download(["ABL1"], tmp_path / "again"))  # a download of the download
+    listed = json.loads((atlas_dir / "sas" / "MANIFEST.json").read_text())
+    for folder in (out, again):
+        assert sorted(p.name for p in (folder / "sas").iterdir()) == ["MANIFEST.json", f"{ABL1}.json.gz"]
+        assert (folder / "sas" / f"{ABL1}.json.gz").read_bytes() == (atlas_dir / "sas" / f"{ABL1}.json.gz").read_bytes()
+        data = (folder / "sas" / "MANIFEST.json").read_bytes()
+        assert json.loads(data) == {f"{ABL1}.json.gz": listed[f"{ABL1}.json.gz"]}
+        assert json.loads((folder / "MANIFEST.json").read_text())["files"]["sas/MANIFEST.json"] == {
+            "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+        page = Path(Atlas(folder).select(ABL1, DRUG).show(path=tmp_path / f"{folder.name}.html")).read_text("utf-8")
+        assert workspace.page_payload(page)["proteins"][0]["sas"]["pockets"]
+    Atlas(location).download(["EGFR"], out)  # one more protein: sas/MANIFEST.json lists both
+    assert json.loads((out / "sas" / "MANIFEST.json").read_text()) == {
+        k: listed[k] for k in (f"{ABL1}.json.gz", f"{EGFR}.json.gz")}
+
+    without = Path(shutil.copytree(atlas_dir, tmp_path / "without", ignore=shutil.ignore_patterns("sas")))
+    location = without if source == "local" else http_server(without).url
+    out = Path(Atlas(location).download(["ABL1"], tmp_path / "out_without"))
+    assert not (out / "sas").exists() and not any(rel.startswith("sas/") for rel in json.loads(
+        (out / "MANIFEST.json").read_text())["files"])
+    page = Path(Atlas(out).select(ABL1, DRUG).show(path=tmp_path / "without.html")).read_text("utf-8")
+    assert "sas" not in workspace.page_payload(page)["proteins"][0]
+
+    # a sas/MANIFEST.json that is not JSON: a warning, no sas/; an entry that is not [sha256, bytes]: that file left out
+    for k, text in enumerate(["{not json", json.dumps(dict(listed, **{f"{ABL1}.json.gz": ["abc", "12"]}))]):
+        broken = Path(shutil.copytree(atlas_dir, tmp_path / f"broken{k}"))
+        (broken / "sas" / "MANIFEST.json").write_text(text)
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="pocketvina.atlas"):
+            out = Path(Atlas(broken if source == "local" else http_server(broken).url).download(
+                ["ABL1", "EGFR"], tmp_path / f"out_broken{k}"))
+        names = sorted(p.name for p in (out / "sas").iterdir()) if (out / "sas").exists() else []
+        assert names == ([] if k == 0 else ["MANIFEST.json", f"{EGFR}.json.gz"]) and (out / "meta.json").is_file()
+        assert ("are not copied" if k == 0 else "does not list it as [sha256, bytes]") in caplog.text
+
+    damaged = release / "sas" / f"{ABL1}.json.gz"
+    damaged.write_bytes(damaged.read_bytes()[:-1] + b"x")
+    location = release if source == "local" else http_server(release).url
+    with pytest.raises(ValueError, match=f"sas/{ABL1}.json.gz is damaged .*sha256"):
+        Atlas(location).download(["ABL1"], tmp_path / "out_damaged")
+    assert not (tmp_path / "out_damaged" / "meta.json").exists()
 
 
 LICENCE = b"The licence of the data of this test release.\n"
@@ -1218,6 +1306,68 @@ def test_atlas_over_http(atlas_server, tmp_path, monkeypatch):
     assert any(header for _, header in atlas_server.requests if header)  # the poses came in Range requests
 
 
+def _no_network(monkeypatch):
+    """Every HTTP request fails as without network (at once: no waits between the tries)."""
+    def fail(*args, **kwargs):
+        raise OSError("Network is unreachable")
+
+    monkeypatch.setattr(atlas_source, "_fetch", fail)
+    monkeypatch.setattr(atlas_source, "_urlopen", fail)
+    monkeypatch.setattr(atlas_source, "RETRY_DELAYS", (0, 0, 0))
+
+
+def test_sas_points(atlas_dir, atlas_server, tmp_path, monkeypatch):
+    """P2Rank's SAS points of a protein for its page (Atlas._sas): sas/<U>.json.gz, from a folder and over HTTP. Over
+    HTTP the file and sas/MANIFEST.json are kept in the cache: later they are read from there, also without network."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    expected = sas.decode((atlas_dir / "sas" / f"{ABL1}.json.gz").read_bytes())
+    assert expected["protein"] == ABL1 and list(expected["pockets"]) == ["1", "2", "3", "4", "5"]
+    assert Atlas(atlas_dir)._sas(ABL1) == expected
+    remote = Atlas(atlas_server.url)
+    asked = len(atlas_server.requests)
+    assert remote._sas(ABL1) == expected
+    assert [r for r, _ in atlas_server.requests[asked:]] == ["sas/MANIFEST.json", f"sas/{ABL1}.json.gz"]
+    asked = len(atlas_server.requests)
+    again = Atlas(atlas_server.url)
+    assert again._sas(ABL1) == expected
+    assert [r for r, _ in atlas_server.requests[asked:]] == ["meta.json"]  # never from the cache: it names the release
+    again._sas_files = None  # sas/MANIFEST.json is read again: from the cache
+    _no_network(monkeypatch)
+    assert again._sas(ABL1) == expected
+
+
+def test_sas_points_missing_or_unreadable(atlas_dir, atlas_server, tmp_path, monkeypatch, caplog):
+    """None without SAS points: a release without sas/ (an older release or download), a protein sas/MANIFEST.json does
+    not list. None and a warning when they cannot be read: a damaged file, a damaged listing in sas/MANIFEST.json, no
+    network (then asked again next time)."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    without = Path(shutil.copytree(atlas_dir, tmp_path / "without", ignore=shutil.ignore_patterns("sas")))
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    listed = json.loads((release / "sas" / "MANIFEST.json").read_text())
+    del listed[f"{EGFR}.json.gz"]
+    (release / "sas" / "MANIFEST.json").write_text(json.dumps(listed))
+    damaged = release / "sas" / f"{PTGS2}.json.gz"
+    damaged.write_bytes(damaged.read_bytes()[:-1] + b"x")
+    with caplog.at_level(logging.WARNING, logger="pocketvina.atlas"):
+        assert Atlas(without)._sas(ABL1) is None
+        atlas = Atlas(release)
+        assert atlas._sas(EGFR) is None and atlas._sas(ABL1)["protein"] == ABL1
+        assert not caplog.text
+        assert atlas._sas(PTGS2) is None
+        assert f"{PTGS2}: the page is shown without P2Rank's SAS points" in caplog.text and "damaged" in caplog.text
+        caplog.clear()
+        sha256, size = atlas._sas_files[f"{ABL1}.json.gz"]
+        for wrong in ([sha256, None], [sha256, str(size)], [sha256], {"sha256": sha256}):  # a damaged listing
+            atlas._sas_files[f"{ABL1}.json.gz"] = wrong
+            assert atlas._sas(ABL1) is None
+            assert "does not list it as [sha256, bytes]" in caplog.text
+            caplog.clear()
+        remote = Atlas(atlas_server.url)
+        _no_network(monkeypatch)
+        assert remote._sas(ABL1) is None and "cannot reach the PocketVina Atlas" in caplog.text
+        assert remote._sas_files is None  # asked again next time
+
+
 # --- the public Atlas ------------------------------------------------------------------------------------------
 
 @pytest.mark.network
@@ -1231,6 +1381,8 @@ def test_public_atlas(tmp_path, monkeypatch):
     assert list(scores.columns) == list(BEST_SCORES_COLUMNS) and len(scores) == 5
     top, blocks = atlas._pair_poses(ABL1, DRUG)
     assert top and all(block.startswith("MODEL") for block in blocks.values())
+    points = atlas._sas(ABL1)  # checked against sas/MANIFEST.json
+    assert points["protein"] == ABL1 and list(points["pockets"]) == ["1", "2", "3", "4", "5"] and points["rest"]
 
 
 def test_example_script_runs(atlas_dir, tmp_path):

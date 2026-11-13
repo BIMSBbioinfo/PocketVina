@@ -71,6 +71,19 @@ def _folder_name(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("._") or "release"
 
 
+def _is_file_as(path: str, size: Optional[int], sha256: Optional[str]) -> bool:
+    """Whether the file at ``path`` has this size and sha256 (None: any)."""
+    if size is not None and os.path.getsize(path) != size:
+        return False
+    if sha256 is None:
+        return True
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(_CHUNK), b""):
+            h.update(chunk)
+    return h.hexdigest() == sha256
+
+
 class Source:
     """The files of one PocketVina Atlas release: ``location`` is its folder (the one with meta.json), e.g.
     "/data/atlas/v1.1", or the http(s) URL of that folder."""
@@ -134,16 +147,22 @@ class Source:
             data = gzip.decompress(data)
         return json.loads(data)
 
-    def file(self, path: str) -> str:
+    def file(self, path: str, size: Optional[int] = None, sha256: Optional[str] = None) -> str:
         """A whole file of the release as a local path, e.g. "structures/AF-P00519-F1-model_v6.pdb.gz": the file
-        itself in a folder; for a URL its copy in the cache, downloaded on first use."""
+        itself in a folder; for a URL its copy in the cache, downloaded on first use. ``size``, ``sha256``: what the
+        file must be (e.g. as sas/MANIFEST.json lists it): a file in a folder that differs raises ValueError; a copy
+        in the cache that differs is downloaded again, and a download that differs is not kept (ValueError)."""
         rel = _rel(path)
         if self.path is not None:
-            return self._local(rel)
+            local = self._local(rel)
+            if not _is_file_as(local, size, sha256):
+                raise ValueError(f"{local} is damaged: it is not the file the release lists ({size} bytes, sha256 "
+                                 f"{sha256})")
+            return local
         target, reuse = self._cache_path(rel)
-        if reuse and os.path.isfile(target):
+        if reuse and os.path.isfile(target) and _is_file_as(target, size, sha256):
             return target
-        self.copy(rel, target)
+        self.copy(rel, target, size=size, sha256=sha256)
         return target
 
     def copy(self, path: str, target, size: Optional[int] = None, sha256: Optional[str] = None,

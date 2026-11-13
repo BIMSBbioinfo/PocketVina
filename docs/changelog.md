@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0
+
+### Added
+
+- A docking run keeps P2Rank's solvent accessible surface (SAS) points of each protein, in
+  `sas/<protein_id>.json.gz` of the results folder. `Results.sas("1fbl")` reads them.
+- In the page of `show()`, a SAS button before the pocket chips draws these points, coloured by P2Rank's score from
+  green to red, larger in the pockets. Pages of the PocketVina Atlas have it too, also from a folder of
+  `Atlas.download()`.
+- Under the legend of the 3D view, Protein and Ligand hide or show the protein and the ligand. The protein's style
+  (Cartoon, Surface, Sticks) is a small menu there, in place of the three buttons.
+
 ## 0.3.3
 
 ### Changed

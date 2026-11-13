@@ -11,7 +11,11 @@
  *   {type:'prefetch', protein}  round 12: the structure the next 'show' will name; fetched and read while Mol* starts
  * spec = {theme, protein:'structures/AF-…pdb', gene, pockets:[{rank,residues}], showPockets:[ranks], proteinStyle:'cartoon'|'surface'|'sticks' (round 13),
  *         focusPocket, focusResidue:{chain,seq}, hiddenInteractions:[types],
- *         ligand:{text, format:'pdbqt'|'sdf', model:0-based index, nModels, allModes, key}}
+ *         ligand:{text, format:'pdbqt'|'sdf', model:0-based index, nModels, allModes, key},
+ *         sas:{protein, pockets:{rank: [x, y, z, score, …]}, others: […], rest: […]} | null, hideLigand: boolean}
+ *   PocketVina: sas (P2Rank's SAS points), hideLigand and proteinStyle 'none' (the protein hidden) as on the site (its rounds 14r and
+ *   14t); a 'show' that differs from the last drawing only in these builds, shows or removes them without a new drawing, and after
+ *   building or removing the points this frame sends sas {protein, shown: {pockets, rest} (counts) | null} or {protein, error}
  *   gene (round 10): the protein's gene symbol, for the structure's name in Mol*'s hover box ("EGFR (AF-P00533-F1)"; optional)
  * Messages sent: viewer-ready, viewer-drawn, viewer-error, key (arrows), residues (names + pLDDT of the protein, once per protein),
  *   contacts (residues within 4 Å of the drawn pose and the interaction types Mol* found),
@@ -293,7 +297,8 @@
   // Round 13: the protein's style, picked with the buttons beside the legend (as Mol*'s representation choices): cartoon (default), a
   // molecular surface (translucent, so the pose and the residue sticks inside stay visible) or ball-and-stick (grey carbon, thinner
   // than the residue sticks). One representation (pv-cartoon) changes its type in place: no other part of the scene is rebuilt.
-  const STYLES = ['cartoon', 'surface', 'sticks'];
+  // PocketVina: 'none' hides the protein (the site's round 14t: the page's Protein button), e.g. to see the SAS points alone
+  const STYLES = ['cartoon', 'surface', 'sticks', 'none'];
   const styleOf = spec => (STYLES.includes(spec && spec.proteinStyle) ? spec.proteinStyle : 'cartoon');
   function polymerStyle(style, dark) {
     const C = PROTEIN[dark ? 'dark' : 'light'];
@@ -311,7 +316,13 @@
     const c3 = viewer.plugin.canvas3d, manual = !!(c3 && c3.props.camera.manualReset);
     if (c3 && !manual) c3.setProps({ camera: { manualReset: true } });
     try {
-      await SD().build().to(prot.polyRepr).update(reprParams(dataOf(prot.struct), polymerStyle(style, dark))).commit();
+      // PocketVina: 'none' hides the representation and keeps its type (the site's round 14t); another style shows it again
+      const S = SD(), hidden = !!(cellOf(prot.polyRepr).state && cellOf(prot.polyRepr).state.isHidden);
+      if (style === 'none') { if (!hidden) S.updateCellState(prot.polyRepr, { isHidden: true }); }
+      else {
+        await S.build().to(prot.polyRepr).update(reprParams(dataOf(prot.struct), polymerStyle(style, dark))).commit();
+        if (hidden) S.updateCellState(prot.polyRepr, { isHidden: false });
+      }
       if (c3) c3.commit(true);
     } finally {
       if (c3 && !manual) {
@@ -350,7 +361,8 @@
     await b.commit();
     const s = dataOf(struct), index = residueIndex(s), b2 = SD().build();
     const pose = bundleOf(s, index, ['L:1']), inter = bundleOf(s, index, ['L:1', ...lig.site.map(r => `${r.chain}:${r.seq}`)]);
-    if (pose) representation(b2, component(b2, struct, pose, 'Pose', 'pv-lig').ref, s, sticks(LIGAND_C, true, 1, true), 'pv-lig-repr');
+    // PocketVina: made hidden while the ligand is hidden (the site's round 14t), so a mode step does not flash the pose
+    if (pose) representation(b2, component(b2, struct, pose, 'Pose', 'pv-lig').ref, s, sticks(LIGAND_C, true, 1, true), 'pv-lig-repr', ligandHidden ? { isHidden: true } : null);
     if (inter) component(b2, struct, inter, 'Interaction site', 'pv-site-inter');
     await b2.commit();
     counters.siteBuilds++;
@@ -370,7 +382,9 @@
       for (let i = 0; i < n; i++) {
         if (i === lig.model) continue;
         const s = traj.apply(ST().Model.ModelFromTrajectory, { modelIndex: i }).apply(ST().Model.StructureFromModel, { type: { name: 'model', params: {} } }, { tags: ['pv-modes'] });
-        representation(b, s.ref, siteStructure() || molstar.lib.structure.Structure.Empty, sticks(mix(MODE_DARK[0], MODE_LIGHT[0], i / (n - 1)), true, i === 0 ? 0.9 : 0.55, true, false, i === 0 ? 0.8 : 0.5), `pv-mode-repr:${i}`);
+        // PocketVina: made hidden while the ligand is hidden (the site's round 14t)
+        representation(b, s.ref, siteStructure() || molstar.lib.structure.Structure.Empty, sticks(mix(MODE_DARK[0], MODE_LIGHT[0], i / (n - 1)), true, i === 0 ? 0.9 : 0.55, true, false, i === 0 ? 0.8 : 0.5), `pv-mode-repr:${i}`,
+          ligandHidden ? { isHidden: true } : null);
       }
       scene.modes = { key, data: data.ref };
     }
@@ -539,7 +553,9 @@
           // inside the site (intra-unit), which the legend and the Contacts list do not count
           // ignoreHydrogens (round 7, §2): an H-bond line ends on its donor / acceptor heavy atom, not on a polar hydrogen of the pose,
           // which is not drawn (the sticks ignore hydrogens)
-          await RB().addRepresentation(site, { type: 'interactions', typeParams: { visuals: ['inter-unit'], ignoreHydrogens: true } }, { tag: 'pv-interactions' });
+          // PocketVina: made hidden while the ligand is hidden, so a mode step does not flash the lines (the site's round 14t)
+          await RB().addRepresentation(site, { type: 'interactions', typeParams: { visuals: ['inter-unit'], ignoreHydrogens: true } },
+            { tag: 'pv-interactions', initialState: { isHidden: ligandHidden } });
         }
         found = readInteractions(site.obj.data); if (found) source = 'molstar';
         mark('interactions');
@@ -1695,8 +1711,121 @@
     debug().surfaces = shown;
     post({ type: 'surfaces', shown });
   }
+
+  // ---------------------------------------------------------------- PocketVina: P2Rank's SAS points (the site's round 14r)
+  // The solvent accessible surface points P2Rank put around the protein, as P2Rank's own PyMOL script shows them: every point a small
+  // sphere, the points of every P2Rank pocket larger, each coloured by its P2Rank score from green (0) to red (0.7)
+  // (cmd.spectrum("b", "green_red", minimum=0, maximum=0.7)). spec.sas = {protein, pockets: {rank: [x, y, z, score, …]} (the docked
+  // pockets), others: […] (P2Rank's other pockets), rest: […] (in no pocket)} while the page's SAS toggle is on, else null; the lists
+  // may be typed arrays. Two small structures (the points of the pockets, the rest), context only (no hover, no pick); switching them
+  // on or off leaves the camera where it is. The numbers are checked here, and the structure text is written here from them (the
+  // score in the B-factor column, which Mol*'s 'uncertainty' colour theme reads).
+  // SAS_SCALE: red first: Mol*'s 'uncertainty' theme runs its colour list in reverse (high value = first colour), so this draws
+  // green at score 0 and red at 0.7, as P2Rank's spectrum does. The site takes the ranks 1 to 5 (it docked 5 pockets); here every rank.
+  const SAS_MAX = 200000, SAS_RADIUS = { pockets: 0.48, rest: 0.24 }, SAS_SCALE = [0xff0000, 0x00ff00], SAS_SCORE_MAX = 0.7;
+  let sasBuilt = '';                                              // the sasKey of the points built now ('' = none)
+  const sasCount = { pockets: 0, rest: 0 };
+  const okNumbers = a => (Array.isArray(a) || ArrayBuffer.isView(a)) && a.length % 4 === 0 && a.every(v => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) < 1e4);
+  const sasKey = spec => {
+    const x = spec && spec.sas;
+    if (!x || x.protein !== spec.protein || !x.pockets || typeof x.pockets !== 'object') return '';
+    return `${x.protein}|${Object.keys(x.pockets).sort().map(k => `${k}:${(x.pockets[k] || []).length}`).join(',')}|${(x.others || []).length}|${(x.rest || []).length}`;
+  };
+  // points a PDB line can hold (8.3f: more than -1000 Å would shift the columns) are kept; appended one by one (no spread of a long array)
+  const keep = (out, a) => { for (let i = 0; i < a.length; i += 4) if (Math.abs(a[i]) < 1000 && Math.abs(a[i + 1]) < 1000 && Math.abs(a[i + 2]) < 1000) out.push(a[i], a[i + 1], a[i + 2], a[i + 3]); };
+  function sasSets(spec) {                                        // {pockets: [x, y, z, s, …] (every pocket), rest: […]}, checked; null when off
+    if (!sasKey(spec)) return null;
+    const x = spec.sas, total = Object.values(x.pockets).reduce((n, v) => n + (v && v.length ? v.length : 0), 0) + ((x.others || []).length || 0) + ((x.rest || []).length || 0);
+    if (total / 4 > SAS_MAX) throw new Error(`more than ${SAS_MAX} SAS points`);   // the site draws none
+    const pockets = [], rest = [];
+    for (const [k, v] of Object.entries(x.pockets)) { const r = Number(k); if (Number.isInteger(r) && r >= 1 && r <= MAX_POCKETS && okNumbers(v)) keep(pockets, v); }
+    if (okNumbers(x.others || [])) keep(pockets, x.others || []);
+    if (okNumbers(x.rest || [])) keep(rest, x.rest || []);
+    return { pockets, rest };
+  }
+  const f83 = v => v.toFixed(3).padStart(8), f62 = v => Math.min(Math.max(v, -99), 999).toFixed(2).padStart(6);
+  function sasPdb(xyzs) {                                         // HETATM records, one atom per point (as P2Rank's points file, "STP")
+    const L = [];
+    for (let i = 0, n = 1; i < xyzs.length; i += 4, n++)
+      L.push(`HETATM${String(n % 100000).padStart(5)}  C   STP S   1    ${f83(xyzs[i])}${f83(xyzs[i + 1])}${f83(xyzs[i + 2])}  1.00${f62(xyzs[i + 3])}           C`);
+    return L.join('\n') + '\nEND\n';
+  }
+  function sasCells() {
+    const out = new Map();
+    for (const c of viewer.plugin.state.data.cells.values()) {
+      const t = (c.transform.tags || []).find(x => x.startsWith('pv-sas-points:')); if (t) out.set(t.slice(14), c);
+    }
+    return out;
+  }
+  const isSasData = t => t.startsWith('pv-sas-structure:') && t.endsWith('-data');   // applyStructure's data cell: deleting it takes the rest
+  async function syncSas(spec) {
+    const key = sasKey(spec), cells = sasCells();
+    if (key ? key === sasBuilt && cells.size : !sasBuilt && !cells.size) return;   // as they are (none: nothing to do)
+    const c3 = viewer.plugin.canvas3d, manual = !!(c3 && c3.props.camera.manualReset);   // the camera stays (as applyStyle)
+    if (c3 && !manual) c3.setProps({ camera: { manualReset: true } });
+    try { await rebuildSas(spec, key, cells); if (c3) c3.commit(true); } finally {
+      if (c3 && !manual) {
+        c3.setProps({ camera: { manualReset: false } });
+        try { c3.camera.setState({ radiusMax: c3.boundingSphere.radius * (c3.props.sceneRadiusFactor || 1) }, 0); } catch (e) { /* the next scene change sets it */ }
+      }
+    }
+    lastCam = ''; scheduleFit();                                     // the labels against the points
+    post({ type: 'sas', protein: spec.protein, shown: sasBuilt ? { pockets: sasCount.pockets, rest: sasCount.rest } : null });
+  }
+  async function rebuildSas(spec, key, cells) {
+    if (cells.size || sasBuilt) {                                 // another protein's or switched off: the points go
+      const S = SD(), b = S.build(); let n = 0;
+      for (const c of S.cells.values()) if ((c.transform.tags || []).some(isSasData)) { b.delete(c.transform.ref); n++; }
+      if (n) await b.commit();
+      sasBuilt = ''; sasCount.pockets = sasCount.rest = 0;
+    }
+    debug().sas = null;
+    const sets = sasSets(spec);
+    if (!sets || !(sets.pockets.length + sets.rest.length)) return;
+    const b = SD().build();
+    for (const part of ['rest', 'pockets']) {
+      const xyzs = sets[part]; if (!xyzs.length) continue;
+      const { struct } = applyStructure(b, sasPdb(xyzs), part === 'pockets' ? 'SAS points of the pockets' : 'SAS points', 'pdb', `pv-sas-structure:${part}`);
+      // spheres only: ball-and-stick's element spheres, no bonds (the Mol* bundle has no spacefill)
+      representation(b, struct, molstar.lib.structure.Structure.Empty, { type: 'ball-and-stick',
+        typeParams: { visuals: ['element-sphere'], sizeFactor: 1, ignoreHydrogens: false, ...(part === 'pockets' ? { alpha: 0.9 } : {}) },
+        color: 'uncertainty', colorParams: { domain: [0, SAS_SCORE_MAX], list: { kind: 'interpolate', colors: SAS_SCALE } },
+        size: 'uniform', sizeParams: { value: SAS_RADIUS[part] } }, `pv-sas-points:${part}`);
+      sasCount[part] = xyzs.length / 4;
+    }
+    await b.commit();
+    sasBuilt = key;
+    for (const c of sasCells().values()) { try { c.obj.data.repr.setState({ markerActions: 0, pickable: false }); } catch (e) { /* not drawn yet */ } }
+    debug().sas = { pockets: sasCount.pockets, rest: sasCount.rest };
+  }
+  function sasFailed(spec, e) {                                   // the page's toggle says so ("could not be loaded")
+    window.__pvError = 'sas: ' + String(e && e.message || e);
+    post({ type: 'sas', protein: spec.protein, error: String(e && e.message || e).slice(0, 200) });
+  }
+  // The page's Ligand button (the site's round 14t) hides the pose (the pose, its modes, its interaction lines, the residue sticks and
+  // labels around it) without a new drawing; the camera stays. The pose's own cells (LIGAND_TAG) are hidden here; the stick and label
+  // slots are emptied (removeResidues) and stay empty while ligandHidden is set (a drawing applies it again). Shown again, the
+  // sticks, labels and contacts are built as a drawing builds them (interactions).
+  let ligandHidden = false;
+  const LIGAND_TAG = t => t === 'pv-lig-repr' || t === 'pv-interactions' || t === 'pv-line' || t.startsWith('pv-mode-repr:');
+  function hidePoseCells(hide) {
+    const S = SD();
+    for (const c of S.cells.values())
+      if ((c.transform.tags || []).some(LIGAND_TAG) && !!(c.state && c.state.isHidden) !== hide) S.updateCellState(c.transform.ref, { isHidden: hide });
+  }
+  async function setLigandHidden(spec) {
+    const want = !!spec.hideLigand; if (want === ligandHidden) return false;
+    ligandHidden = want;
+    if (want) { await clearPicked(); hidePoseCells(true); await removeResidues(); }
+    else { hidePoseCells(false); if (drawnAtoms && drawnAtoms.lig) await interactions(spec, drawnAtoms.lig, drawnAtoms.P); }
+    // interactions() renews __pvDebug
+    debug().ligandHidden = want; debug().sas = sasBuilt ? { pockets: sasCount.pockets, rest: sasCount.rest } : null;
+    lastCam = ''; scheduleFit();
+    return true;
+  }
   let drawnKey = '', drawnShow = '', drawnSpec = null;          // round 12: the spec of the last completed drawing
-  const specKey = spec => JSON.stringify({ ...spec, showPockets: null, proteinStyle: null });
+  // PocketVina: nor do the SAS points and the pose hidden (the site's rounds 14r, 14t)
+  const specKey = spec => JSON.stringify({ ...spec, showPockets: null, proteinStyle: null, sas: null, hideLigand: null });
   async function toggleSurfaces(spec) {
     try {
       const want = (spec.showPockets || []).map(Number);
@@ -1777,11 +1906,15 @@
       const keepFocus = kind !== 'protein' && !fr && picked.focus ? picked.focus.key : null;
       await clearPicked();
       const recolourOnly = wasComplete && kind === 'theme' && specKey({ ...prev, theme: '' }) === specKey({ ...spec, theme: '' });
-      if (recolourOnly) { await recolor(spec); await applyStyle(spec); }
+      // PocketVina: the pose hidden or shown with a theme change too (the site's round 14t)
+      if (recolourOnly) { await recolor(spec); await applyStyle(spec); await setLigandHidden(spec); }
       else {
         await removeResidues(); mark('residues out');               // this pose's sticks and labels come with the interactions
+        // PocketVina: the pose hidden (the site's round 14t): its new cells are made hidden (not even in the first frame)
+        ligandHidden = !!spec.hideLigand; debug().ligandHidden = ligandHidden;
         await syncSite(spec, lig, hiddenTypes(spec)); mark('site');
         await syncModes(spec, lig); mark('modes');
+        hidePoseCells(ligandHidden);                                // PocketVina: those kept from the last drawing too, hidden or shown
         await recolor(spec);                                        // after a theme change
         await applyStyle(spec);                                     // round 13: the protein in the style picked (a new protein: cartoon first)
         switchCamera(kind, spec, lig, keepFocus);
@@ -1803,6 +1936,11 @@
       else if (lig) await interactions(spec, lig, P);
       else { await residueSticks(spec, null, null); labelInfo = []; lastContacts = null; post({ type: 'contacts', key: '', source: 'none', contacts: [] }); }
       mark('interactions, sticks, labels');
+      // PocketVina: the pose hidden (its contacts went to the page; nothing shown) and the SAS points (the site's rounds 14t, 14r);
+      // interactions() renews __pvDebug
+      if (ligandHidden) { hidePoseCells(true); await removeResidues(); }
+      try { await syncSas(spec); } catch (e) { sasFailed(spec, e); }
+      debug().sas = sasBuilt ? { pockets: sasCount.pockets, rest: sasCount.rest } : null; debug().ligandHidden = ligandHidden;
       try { await focusFromSpec(spec, !recolourOnly); } catch (e) { window.__pvError = 'focus: ' + String(e && e.message || e); }
       if (keepFocus) try { refocus(keepFocus); } catch (e) { window.__pvError = 'refocus: ' + String(e && e.message || e); }
       picked.drawing = false; publish();
@@ -1837,6 +1975,13 @@
           let styled = false;
           try { styled = await applyStyle(spec); } catch (e) { window.__pvError = 'style: ' + String(e && e.message || e); }
           if (styled) drawnSpec = { ...drawnSpec, proteinStyle: spec.proteinStyle };
+          // PocketVina: also the SAS points or the pose hidden (the site's rounds 14r, 14t); styled: something changed
+          if (sasKey(spec) !== sasBuilt) {
+            try { await syncSas(spec); } catch (e) { sasFailed(spec, e); }
+            drawnSpec = { ...drawnSpec, sas: spec.sas }; styled = true;
+          }
+          try { if (await setLigandHidden(spec)) { styled = true; drawnSpec = { ...drawnSpec, hideLigand: spec.hideLigand }; } }
+          catch (e) { window.__pvError = 'ligand: ' + String(e && e.message || e); }
           if (surf) { await toggleSurfaces(spec); continue; }
           if (styled) { await onScreen(); post({ type: 'viewer-drawn' }); continue; }
         }
