@@ -1903,7 +1903,10 @@
       if (fr && !tipNames.has(`${fr.chain}:${+fr.seq}`)) tipNames.set(`${fr.chain}:${+fr.seq}`, `${(P.names[`${fr.chain}_${+fr.seq}`] || ['RES'])[0]}${+fr.seq}`);
       // round 13: Mol*'s focus stays on a new pose of the same protein (the ligand: on the new pose; a residue: on that residue), as in
       // Mol*; a clicked line does not (its atoms change). Round 7 cleared every focus here.
-      const keepFocus = kind !== 'protein' && !fr && picked.focus ? picked.focus.key : null;
+      // PocketVina: nor when this spec newly hides the pose (the site's round 14v), as Ligand off alone does: the focus would draw the
+      // pose and its 5 Å residues again. ligandHidden is still the last drawing's here.
+      const hiding = !!spec.hideLigand && !ligandHidden;
+      const keepFocus = kind !== 'protein' && !fr && picked.focus && !hiding ? picked.focus.key : null;
       await clearPicked();
       const recolourOnly = wasComplete && kind === 'theme' && specKey({ ...prev, theme: '' }) === specKey({ ...spec, theme: '' });
       // PocketVina: the pose hidden or shown with a theme change too (the site's round 14t)

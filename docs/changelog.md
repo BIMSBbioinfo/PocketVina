@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.1
+
+### Fixed
+
+- In the page of `show()`, after a click on the ligand in the 3D view, switching Ligand off under the legend hides
+  the ligand also right after another change, e.g. another mode, pocket or ligand, or the theme. The ligand and the
+  residues around it stayed drawn.
+
 ## 0.4.0
 
 ### Added
