@@ -11,7 +11,7 @@ protein page of the [PocketVina Atlas](https://pocketvina-atlas.mdc-berlin.de/).
 | `bridge.js`, `workspace.js`, `workspace.css` | the page around the viewer, written for PocketVina |
 
 The Atlas files come from the source of the PocketVina Atlas website, git commit `40e8d59`. The SAS points and the
-hidden protein and ligand in `viewer.js` came later, from its rounds 14r and 14t, marked `PocketVina:` as well.
+hidden protein and ligand in `viewer.js` came later, from its rounds 14r, 14t and 14v, marked `PocketVina:` as well.
 
 The page (`pocketvina/workspace.py`) keeps itself safe to open:
 

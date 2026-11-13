@@ -619,10 +619,16 @@ def test_bar_shows_or_hides_the_protein_and_the_ligand():
                  "'pv-lig-repr', ligandHidden ? { isHidden: true } : null);",
                  "`pv-mode-repr:${i}`,\n          ligandHidden ? { isHidden: true } : null);",
                  "hidePoseCells(ligandHidden);",
-                 "if (recolourOnly) { await recolor(spec); await applyStyle(spec); await setLigandHidden(spec); }"):
+                 "if (recolourOnly) { await recolor(spec); await applyStyle(spec); await setLigandHidden(spec); }",
+                 # 0.4.1: Ligand off in one spec with another change drops Mol*'s focus, as Ligand off alone does
+                 "const hiding = !!spec.hideLigand && !ligandHidden;",
+                 "const keepFocus = kind !== 'protein' && !fr && picked.focus && !hiding ? picked.focus.key : null;"):
         assert part in viewer, part
     draw = viewer[viewer.index("async function draw(spec, since)"):]
-    order = ("ligandHidden = !!spec.hideLigand;", "await syncSite(spec, lig, hiddenTypes(spec));",
+    # `hiding` reads the last drawing's ligandHidden, before either branch of this drawing changes it
+    order = ("const hiding = !!spec.hideLigand && !ligandHidden;",
+             "if (recolourOnly) { await recolor(spec); await applyStyle(spec); await setLigandHidden(spec); }",
+             "ligandHidden = !!spec.hideLigand;", "await syncSite(spec, lig, hiddenTypes(spec));",
              "hidePoseCells(ligandHidden);")
     assert [draw.index(part) for part in order] == sorted(draw.index(part) for part in order)
 
