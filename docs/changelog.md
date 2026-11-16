@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.2
+
+### Fixed
+
+- In the page of `show()`, the residues of a protein chain named L are no longer taken for the ligand. Their
+  interaction lines and types, labels and names on hover were missing, and a clicked one was drawn in the ligand's
+  colour. After such a click, another mode put the focus on the ligand and drew it, also with Ligand off.
+
 ## 0.4.1
 
 ### Fixed

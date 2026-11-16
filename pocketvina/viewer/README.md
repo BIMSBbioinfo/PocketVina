@@ -10,8 +10,9 @@ protein page of the [PocketVina Atlas](https://pocketvina-atlas.mdc-berlin.de/).
 | `upstream/viewer.js` | the original, to compare: `diff -u upstream/viewer.js viewer.js` |
 | `bridge.js`, `workspace.js`, `workspace.css` | the page around the viewer, written for PocketVina |
 
-The Atlas files come from the source of the PocketVina Atlas website, git commit `40e8d59`. The SAS points and the
-hidden protein and ligand in `viewer.js` came later, from its rounds 14r, 14t and 14v, marked `PocketVina:` as well.
+The Atlas files come from the source of the PocketVina Atlas website, git commit `40e8d59`. The SAS points, the
+hidden protein and ligand, and the pose's chain (one the protein does not use) in `viewer.js` came later, from its
+rounds 14r, 14t, 14v and 14x, marked `PocketVina:` as well.
 
 The page (`pocketvina/workspace.py`) keeps itself safe to open:
 
