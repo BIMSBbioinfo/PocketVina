@@ -622,8 +622,15 @@ def test_bar_shows_or_hides_the_protein_and_the_ligand():
                  "if (recolourOnly) { await recolor(spec); await applyStyle(spec); await setLigandHidden(spec); }",
                  # 0.4.1: Ligand off in one spec with another change drops Mol*'s focus, as Ligand off alone does
                  "const hiding = !!spec.hideLigand && !ligandHidden;",
-                 "const keepFocus = kind !== 'protein' && !fr && picked.focus && !hiding ? picked.focus.key : null;"):
+                 "const keepFocus = kind !== 'protein' && !fr && picked.focus && !hiding ? picked.focus.key : null;",
+                 # 0.4.2: the pose's chain is one the protein does not use, so a residue of a protein chain L is not the
+                 # ligand (a click on one, then another mode, drew the hidden ligand again)
+                 "ligChain = [...'LZYXWVUTSRQPONMKJIHGFEDCBA9876543210'].find(c => !chains.has(c)) || 'L';",
+                 "await clearScene();\n    LIG = P.ligChain || 'L';",  # each new protein, also one without a pose
+                 "return (site && root === site.root && r.chain === LIG) || !((prot && root === prot.root) || "
+                 "(site && root === site.root)) ? 'ligand' : `${r.chain}:${r.seq}`;"):
         assert part in viewer, part
+    assert "=== 'L'" not in viewer and "'L:1'" not in viewer and " LIG L " not in viewer  # every test keys on LIG
     draw = viewer[viewer.index("async function draw(spec, since)"):]
     # `hiding` reads the last drawing's ligandHidden, before either branch of this drawing changes it
     order = ("const hiding = !!spec.hideLigand && !ligandHidden;",
@@ -776,7 +783,7 @@ def test_viewer_changes_are_marked():
     old = (VIEWER / "upstream" / "viewer.js").read_text(encoding="utf-8").splitlines()
     new = (VIEWER / "viewer.js").read_text(encoding="utf-8").splitlines()
     blocks = [op for op in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes() if op[0] != "equal"]
-    assert 8 <= len(blocks) <= 30
+    assert 8 <= len(blocks) <= 50
     for tag, i1, i2, j1, j2 in blocks:
         near = new[max(0, j1 - 3):j2 + 1]
         assert any("PocketVina:" in line for line in near), (tag, old[i1:i2], new[j1:j2])

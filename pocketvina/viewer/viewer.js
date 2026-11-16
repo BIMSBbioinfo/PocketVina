@@ -150,7 +150,10 @@
       atoms.push(a);
       if (a.name === 'CA') names[`${a.ch}_${a.seq}`] = [a.res, a.b];
     }
-    const p = { lines, atoms, names, serial: atoms.length + 1 };
+    // PocketVina: the pose's chain must not be one of the protein's (the site's round 14x: a protein chain L was taken for the
+    // ligand: its residues lost their contacts, and Mol*'s focus on one drew a hidden ligand); L as before when the protein has no chain L
+    const chains = new Set(atoms.map(a => a.ch)), ligChain = [...'LZYXWVUTSRQPONMKJIHGFEDCBA9876543210'].find(c => !chains.has(c)) || 'L';
+    const p = { lines, atoms, names, serial: atoms.length + 1, ligChain };
     proteins.clear(); proteins.set(path, p);                     // one protein at a time
     return p;
   }
@@ -176,9 +179,9 @@
     return { atoms: out.filter(a => Number.isFinite(a.x)), bonds };
   }
   const pad = (s, n) => String(s).padStart(n);
-  function hetatm(serial, name, el, a) {
+  function hetatm(serial, name, el, a, ch) {                      // PocketVina: ch, the pose's chain (the site's round 14x)
     const nm = name.length < 4 ? ' ' + name.padEnd(3) : name.slice(0, 4);
-    return 'HETATM' + pad(serial, 5) + ' ' + nm + ' LIG L   1    ' + pad(a.x.toFixed(3), 8) + pad(a.y.toFixed(3), 8) + pad(a.z.toFixed(3), 8) + '  1.00  0.00          ' + pad(el.toUpperCase(), 2);
+    return 'HETATM' + pad(serial, 5) + ' ' + nm + ' LIG ' + ch + '   1    ' + pad(a.x.toFixed(3), 8) + pad(a.y.toFixed(3), 8) + pad(a.z.toFixed(3), 8) + '  1.00  0.00          ' + pad(el.toUpperCase(), 2);
   }
   // residues within `cut` Å of any ligand heavy atom, nearest distance first
   function near(P, lig, cut) {
@@ -275,6 +278,7 @@
   // the protein: parsed and built once (cartoon, a component per pocket; their surfaces later, see buildSurfaces)
   async function buildProtein(spec, P) {
     await clearScene();
+    LIG = P.ligChain || 'L';                                         // PocketVina: also without a pose (the site's round 14x)
     const dark = spec.theme === 'dark', b = SD().build();
     const { data, struct } = applyStructure(b, P.lines.join('\n') + '\nEND\n', structureName(spec), 'pdb', 'pv-protein');
     const poly = b.to(struct).apply(ST().Model.StructureComponent, { type: { name: 'static', params: 'polymer' }, nullIfEmpty: true, label: 'Polymer' }, { tags: ['pv-polymer'] });
@@ -334,6 +338,8 @@
     lastCam = ''; scheduleFit();                                     // the labels against the new solids
     return true;
   }
+  let LIG = 'L';                                                    // PocketVina: the pose's chain, one the protein does not use (the site's round 14x)
+  const LIG1 = () => `${LIG}:1`;
   // the pose: its atoms, the residues within 4 Å (sticks) and 5 Å (the interaction site), and the site structure's text: the protein
   // residues within SITE_STRUCT_A Å (their lines of the protein file) and the pose as residue LIG of chain L (round 4)
   function ligandOf(L, P) {
@@ -341,7 +347,8 @@
     const model = Math.max(0, Math.min(Number(L.model) || 0, (Number(L.nModels) || 1) - 1));
     const { atoms, bonds } = ligandAtoms(L, model);
     if (!atoms.length) return null;
-    const counts = {}, het = atoms.map((a, i) => { counts[a.el] = (counts[a.el] || 0) + 1; return hetatm(P.serial + i, `${a.el.toUpperCase()}${counts[a.el]}`.slice(0, 4), a.el, a); });
+    LIG = P.ligChain || 'L';                                         // PocketVina: the pose's chain in the site structure (the site's round 14x)
+    const counts = {}, het = atoms.map((a, i) => { counts[a.el] = (counts[a.el] || 0) + 1; return hetatm(P.serial + i, `${a.el.toUpperCase()}${counts[a.el]}`.slice(0, 4), a.el, a, P.ligChain || 'L'); });
     const conect = bonds.filter(([x, y]) => x >= 0 && y >= 0 && x < atoms.length && y < atoms.length).map(([x, y]) => 'CONECT' + pad(P.serial + x, 5) + pad(P.serial + y, 5));
     const keep = new Set(near(P, atoms, SITE_STRUCT_A).map(r => `${r.chain}_${r.seq}`)), lines = [];
     for (let i = 0; i < P.lines.length; i++) { const a = P.atoms[i]; if (keep.has(`${a.ch}_${a.seq}`)) lines.push(P.lines[i]); }
@@ -360,7 +367,7 @@
     const { data, struct } = applyStructure(b, lig.text, structureName(spec, true), 'pdb', 'pv-site');   // PocketVina: the pose's name
     await b.commit();
     const s = dataOf(struct), index = residueIndex(s), b2 = SD().build();
-    const pose = bundleOf(s, index, ['L:1']), inter = bundleOf(s, index, ['L:1', ...lig.site.map(r => `${r.chain}:${r.seq}`)]);
+    const pose = bundleOf(s, index, [LIG1()]), inter = bundleOf(s, index, [LIG1(), ...lig.site.map(r => `${r.chain}:${r.seq}`)]);   // PocketVina: LIG (the site's round 14x)
     // PocketVina: made hidden while the ligand is hidden (the site's round 14t), so a mode step does not flash the pose
     if (pose) representation(b2, component(b2, struct, pose, 'Pose', 'pv-lig').ref, s, sticks(LIGAND_C, true, 1, true), 'pv-lig-repr', ligandHidden ? { isHidden: true } : null);
     if (inter) component(b2, struct, inter, 'Interaction site', 'pv-site-inter');
@@ -432,7 +439,7 @@
     if (fr) s = { s: sphere(residuesLoci(ps, prot.index, [`${fr.chain}:${+fr.seq}`])), extent: 6 };
     else if (spec.focusPocket && (spec.showPockets || []).includes(Number(spec.focusPocket)) && prot.pockets.get(Number(spec.focusPocket)))
       s = { s: sphere(residuesLoci(ps, prot.index, prot.pockets.get(Number(spec.focusPocket)).keys)), extent: 6 };
-    else if (lig && !spec.focusPocket && scene.site) s = { s: sphere(residuesLoci(dataOf(scene.site.struct), scene.site.index, ['L:1'])), extent: 8 };
+    else if (lig && !spec.focusPocket && scene.site) s = { s: sphere(residuesLoci(dataOf(scene.site.struct), scene.site.index, [LIG1()])), extent: 8 };   // PocketVina: LIG (the site's round 14x)
     return s && s.s ? s : null;
   }
   function applyCamera(t) {
@@ -450,14 +457,14 @@
     if (kind === 'protein' || !lig || !scene.site || focusResidueOf(spec) || spec.focusPocket) { applyCamera(cameraTarget(spec, lig)); return; }
     if (keepFocus && keepFocus !== 'ligand') return;
     if (keepFocus !== 'ligand' && kind !== 'drug' && kind !== 'pocket' && kind !== 'mode') return;
-    const loci = residuesLoci(dataOf(scene.site.struct), scene.site.index, ['L:1']), c3 = viewer.plugin.canvas3d;
+    const loci = residuesLoci(dataOf(scene.site.struct), scene.site.index, [LIG1()]), c3 = viewer.plugin.canvas3d;   // PocketVina: LIG (the site's round 14x)
     if (!loci || !c3) { applyCamera(cameraTarget(spec, lig)); return; }
     viewer.plugin.managers.camera.focusLoci(loci, keepFocus === 'ligand' ? { durationMs: 0 } : { minRadius: 0, extraRadius: 8, durationMs: 0 });
   }
   // Round 13: the focus a drawing keeps (switchCamera has placed the camera)
   function refocus(key) {
     let loci = null;
-    if (key === 'ligand') loci = scene.site ? residuesLoci(dataOf(scene.site.struct), scene.site.index, ['L:1']) : null;
+    if (key === 'ligand') loci = scene.site ? residuesLoci(dataOf(scene.site.struct), scene.site.index, [LIG1()]) : null;   // PocketVina: LIG (the site's round 14x)
     else { const [ch, seq] = key.split(':'), S = proteinStructure(); loci = S ? residueLoci(S, ch, +seq) : null; }
     if (loci) viewer.plugin.managers.structure.focus.setFromLoci(loci);
   }
@@ -505,8 +512,8 @@
       const e = I.contacts.edges[i], uA = structure.unitMap.get(e.unitA), uB = structure.unitMap.get(e.unitB);
       if (!uA || !uB) continue;
       const a = atomOf(uA, e.indexA), b2 = atomOf(uB, e.indexB);
-      const res = a.chain === 'L' ? b2 : b2.chain === 'L' ? a : null;
-      if (!res || res.chain === 'L') continue;
+      const res = a.chain === LIG ? b2 : b2.chain === LIG ? a : null;   // PocketVina: LIG (the site's round 14x)
+      if (!res || res.chain === LIG) continue;
       const key = `${res.chain}:${res.seq}`, t = TYPES[e.props.type] || 'other';
       if (!out.has(key)) out.set(key, { chain: res.chain, seq: res.seq, name: res.name, types: new Set(), n: 0 });
       out.get(key).types.add(t); out.get(key).n++;
@@ -1239,7 +1246,7 @@
       const root = (e ? loci.structure : bd.aStructure || loci.structure).root, prot = scene.protein && dataOf(scene.protein.struct), site = scene.site && dataOf(scene.site.struct);
       if (!((prot && root === prot.root) || (site && root === site.root))) return undefined;
       const r = residueOf(unit, unit.elements[e ? firstIndex(e.indices) : bd.aIndex]);
-      return r.chain === 'L' ? undefined : tipNames.get(`${r.chain}:${r.seq}`);
+      return r.chain === LIG ? undefined : tipNames.get(`${r.chain}:${r.seq}`);   // PocketVina: LIG (the site's round 14x)
     } catch (x) { return undefined; }
   }, priority: -1 };
 
@@ -1268,8 +1275,8 @@
   // a ligand–protein line: type, residue, hover text "LYS716 · cation–π · 4.2 Å" (distance between the two feature centres)
   function describeLine(I, unitA, indexA, unitB, indexB, type) {
     const A = featureEnd(I, unitA, indexA), B = featureEnd(I, unitB, indexB);
-    const [p, l] = A.chain === 'L' ? [B, A] : B.chain === 'L' ? [A, B] : [null, null];
-    if (!p || p.chain === 'L') return null;
+    const [p, l] = A.chain === LIG ? [B, A] : B.chain === LIG ? [A, B] : [null, null];   // PocketVina: LIG (the site's round 14x)
+    if (!p || p.chain === LIG) return null;
     const t = TYPES[type] || 'other', d = Math.hypot(p.pos[0] - l.pos[0], p.pos[1] - l.pos[1], p.pos[2] - l.pos[2]), residue = `${p.name}${p.seq}`;
     return { type: t, key: `${p.chain}:${p.seq}`, residue, label: `${residue} · ${t} · ${d.toFixed(1)} Å`, distance: Math.round(d * 10) / 10,
              a: p.pos, b: l.pos, residueAtoms: p.atoms, ligandAtoms: l.atoms };
@@ -1404,7 +1411,8 @@
     const e = loci && loci.elements && loci.elements[0];
     if (!e || !atomic(e.unit)) return null;
     const r = residueOf(e.unit, e.unit.elements[firstIndex(e.indices)]), root = loci.structure.root, prot = proteinStructure(), site = siteStructure();
-    return r.chain === 'L' || !((prot && root === prot.root) || (site && root === site.root)) ? 'ligand' : `${r.chain}:${r.seq}`;
+    // PocketVina: the pose's chain in the site structure; a residue of the protein's structure is never the ligand (the site's round 14x)
+    return (site && root === site.root && r.chain === LIG) || !((prot && root === prot.root) || (site && root === site.root)) ? 'ligand' : `${r.chain}:${r.seq}`;
   }
   function residueLoci(structure, chain, seq) {
     if (structure && scene.protein && structure === proteinStructure()) return residuesLoci(structure, scene.protein.index, [`${chain}:${seq}`]);
@@ -1427,7 +1435,7 @@
       const m = c.obj && isModel(c.obj) ? c.obj.data : null, off = m && Model.AsymIdOffset.get(m).value;
       if (!m || !off || !m.properties.structAsymMap) continue;
       const ids = []; m.properties.structAsymMap.forEach(a => { if (!ids.includes(a.auth_id)) ids.push(a.auth_id); });
-      ids.forEach((id, i) => { colors[off.auth + i] = id === 'L' ? LIGAND_C : grey; });
+      ids.forEach((id, i) => { colors[off.auth + i] = id === LIG ? LIGAND_C : grey; });   // PocketVina: LIG (the site's round 14x)
     }
     for (let i = 0; i < Math.max(2, colors.length); i++) if (colors[i] == null) colors[i] = grey;
     return { name: 'element-symbol', params: { carbonColor: { name: 'chain-id', params: { asymId: 'auth', palette: { name: 'colors', params: { list: { kind: 'set', colors } } } } },
@@ -1518,7 +1526,8 @@
     // Mol*'s feature type 3 is an aromatic ring (its centre); other features name their atoms (named in lineOf, nearest first)
     const ring = F.types && F.types[index] === 3 && members.length > 2;
     const at = members.map((m, i) => { const el = unit.elements[m], c = unit.conformation; return { name: atoms[i].atom, pos: [c.x(el), c.y(el), c.z(el)] }; });
-    return { unit, members, ligand: r.chain === 'L', residue: `${r.name}${r.seq}`, key: `${r.chain}:${r.seq}`, ring, at, pos: p };
+    // PocketVina: LIG (the site's round 14x)
+    return { unit, members, ligand: r.chain === LIG, residue: `${r.name}${r.seq}`, key: `${r.chain}:${r.seq}`, ring, at, pos: p };
   }
   // the atoms of a feature by distance to the other end: the nearest is the one named in __pvDebug.line, the label lists them all
   function nameSide(s, other) {
