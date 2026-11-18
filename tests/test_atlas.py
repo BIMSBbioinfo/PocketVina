@@ -57,12 +57,19 @@ def remote(atlas_server) -> Source:
 
 def test_fixture_is_small_and_listed(atlas_dir):
     """The fixture stays under 3 MB, and its MANIFEST.json lists every other file with its size and sha256, but sas/
-    (as the release's MANIFEST.json): sas/MANIFEST.json lists those."""
+    and chembl_any/ (as the release's MANIFEST.json): sas/MANIFEST.json and chembl_any/MANIFEST.json list those."""
     files = {p.relative_to(atlas_dir).as_posix(): p for p in atlas_dir.rglob("*") if p.is_file()}
     assert sum(p.stat().st_size for p in files.values()) < 3 * 1024 * 1024
     listed = json.loads((atlas_dir / "MANIFEST.json").read_text())["files"]
     sas_files = {rel for rel in files if rel.startswith("sas/")}
-    assert set(listed) == set(files) - {"MANIFEST.json"} - sas_files
+    chembl_files = {rel for rel in files if rel.startswith("chembl_any/")}
+    assert set(listed) == set(files) - {"MANIFEST.json"} - sas_files - chembl_files
+    chembl_listed = json.loads((atlas_dir / "chembl_any" / "MANIFEST.json").read_text())
+    assert {f"chembl_any/{rel}" for rel in chembl_listed} == chembl_files - {"chembl_any/MANIFEST.json"} == {
+        f"chembl_any/proteins/{uniprot}.json.gz" for uniprot in PROTEINS} | {"chembl_any/strict.json.gz"}
+    for rel, entry in chembl_listed.items():
+        data = files[f"chembl_any/{rel}"].read_bytes()
+        assert entry == [hashlib.sha256(data).hexdigest(), len(data)], rel
     for rel, entry in listed.items():
         data = files[rel].read_bytes()
         assert entry == {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}, rel
@@ -900,10 +907,17 @@ def _check_offline(out: Path, proteins, atlas_dir: Path):
     pair = sub.select(protein=ABL1, ligand=DRUG, pocket="all")
     assert len(pair.poses) == 5 and Path(pair.export_protein(out.parent / "protein.pdb")).is_file()
     page = Path(sub.show(ABL1, path=out.parent / "page.html")).read_text(encoding="utf-8")
-    for uniprot in proteins:  # P2Rank's SAS points, for the page's SAS toggle
+    for uniprot in proteins:  # P2Rank's SAS points, for the page's SAS toggle; the ChEMBL records of "ChEMBL Complete"
         assert sub._sas(uniprot) == sas.decode((atlas_dir / "sas" / f"{uniprot}.json.gz").read_bytes())
-    assert workspace.page_payload(page)["proteins"][0]["sas"]["pockets"]
+        assert sub._chembl(uniprot) == (_chembl_json(atlas_dir, f"proteins/{uniprot}.json.gz"),
+                                        _chembl_json(atlas_dir, "strict.json.gz"))
+    data = workspace.page_payload(page)["proteins"][0]
+    assert data["sas"]["pockets"] and [c["label"] for c in data["topColumns"]] == ["ChEMBL Strict", "ChEMBL Complete"]
     return sub
+
+
+def _chembl_json(release: Path, rel: str):
+    return json.loads(gzip.decompress((release / "chembl_any" / rel).read_bytes()))
 
 
 def test_download_from_a_folder(atlas, atlas_dir, tmp_path, capsys):
@@ -915,19 +929,23 @@ def test_download_from_a_folder(atlas, atlas_dir, tmp_path, capsys):
     line = capsys.readouterr().out
     assert "files" in line and "MB" in line and "2 proteins" in line and str(out) in line
     files, release = _tree(out), json.loads((atlas_dir / "MANIFEST.json").read_text())["files"]
-    for rel in set(files) - {"meta.json", "MANIFEST.json", "sas/MANIFEST.json"}:
+    for rel in set(files) - {"meta.json", "MANIFEST.json", "sas/MANIFEST.json", "chembl_any/MANIFEST.json"}:
         assert files[rel].read_bytes() == (atlas_dir / rel).read_bytes(), rel
     expected = {f"{folder}/{uniprot}{ext}" for uniprot in (ABL1, EGFR) for folder, ext in (
         ("proteins", ".json.gz"), ("salt_forms", ".json.gz"), ("poses", ".poses"), ("poses_redock", ".poses"),
-        ("sas", ".json.gz"))}
+        ("sas", ".json.gz"), ("chembl_any/proteins", ".json.gz"))} | {"chembl_any/strict.json.gz"}
     expected |= {f"structures/AF-{uniprot}-F1-model_v6.pdb.gz" for uniprot in (ABL1, EGFR)}
     expected |= {rel for rel in release if rel.startswith(("search/", "compounds/")) and ".all." not in rel}
     expected |= {f"tables/{name}.parquet" for name in ("compound_entries", "compound_entries_annotated", "compounds",
                                                        "proteins")}
-    assert set(files) == expected | {"ligand_ids.json", "meta.json", "MANIFEST.json", "sas/MANIFEST.json"}
+    assert set(files) == expected | {"ligand_ids.json", "meta.json", "MANIFEST.json", "sas/MANIFEST.json",
+                                     "chembl_any/MANIFEST.json"}
     release_sas = json.loads((atlas_dir / "sas" / "MANIFEST.json").read_text())
     assert json.loads(files["sas/MANIFEST.json"].read_text()) == {f"{u}.json.gz": release_sas[f"{u}.json.gz"]
                                                                  for u in (ABL1, EGFR)}
+    release_chembl = json.loads((atlas_dir / "chembl_any" / "MANIFEST.json").read_text())
+    assert json.loads(files["chembl_any/MANIFEST.json"].read_text()) == {
+        rel: release_chembl[rel] for rel in (f"proteins/{ABL1}.json.gz", f"proteins/{EGFR}.json.gz", "strict.json.gz")}
     manifest = json.loads(files["MANIFEST.json"].read_text())
     assert set(manifest["files"]) == set(files) - {"MANIFEST.json"}
     for rel, entry in manifest["files"].items():
@@ -946,7 +964,7 @@ def test_download_over_http_then_offline(atlas_server, atlas_dir, tmp_path, monk
     out = tmp_path / "my_atlas"
     Atlas(atlas_server.url).download(["ABL1"], out)
     for rel, path in _tree(out).items():
-        if rel not in ("meta.json", "MANIFEST.json", "sas/MANIFEST.json"):
+        if rel not in ("meta.json", "MANIFEST.json", "sas/MANIFEST.json", "chembl_any/MANIFEST.json"):
             assert path.read_bytes() == (atlas_dir / rel).read_bytes(), rel
     asked = len(atlas_server.requests)
     atlas_server.shutdown()
@@ -992,9 +1010,11 @@ def test_download_resumes_and_adds_proteins(atlas_server, atlas_dir, tmp_path, m
     assert len([rel for rel in fetched if rel.startswith("search/")]) <= 2  # only to find "EGFR"
     assert json.loads((out / "meta.json").read_text())["subset"]["proteins"] == [ABL1, EGFR]
     before = len(atlas_server.requests)
-    Atlas(atlas_server.url).download(["ABL1", "EGFR"], out)  # all there: only meta.json is read again, and the
-    # size of LICENSE (MANIFEST.json does not list it) is asked for: the fixture has none (HTTP 404)
-    assert set(atlas_server.requests[before:]) == {("meta.json", None), ("LICENSE", "bytes=0-0")}
+    Atlas(atlas_server.url).download(["ABL1", "EGFR"], out)  # all there: only meta.json and the listings of sas/
+    # and chembl_any/ (the server's, not the cache's) are read again, and the size of LICENSE (MANIFEST.json does not
+    # list it) is asked for: the fixture has none (HTTP 404)
+    assert set(atlas_server.requests[before:]) == {("meta.json", None), ("sas/MANIFEST.json", None),
+                                                   ("chembl_any/MANIFEST.json", None), ("LICENSE", "bytes=0-0")}
     _check_offline(out, [ABL1, EGFR], atlas_dir)
 
 
@@ -1080,6 +1100,72 @@ def test_download_copies_the_sas_points(source, atlas_dir, tmp_path, http_server
     damaged.write_bytes(damaged.read_bytes()[:-1] + b"x")
     location = release if source == "local" else http_server(release).url
     with pytest.raises(ValueError, match=f"sas/{ABL1}.json.gz is damaged .*sha256"):
+        Atlas(location).download(["ABL1"], tmp_path / "out_damaged")
+    assert not (tmp_path / "out_damaged" / "meta.json").exists()
+
+
+@pytest.mark.parametrize("source", ["local", "remote"])
+def test_download_copies_the_chembl_records(source, atlas_dir, tmp_path, http_server, monkeypatch, caplog):
+    """The ChEMBL records of "ChEMBL Complete" (chembl_any/proteins/<U>.json.gz of the proteins, and strict.json.gz, the
+    strict values' links; checked by sha256 against chembl_any/MANIFEST.json) go into the folder with a
+    chembl_any/MANIFEST.json of its own, so its pages have both ChEMBL values, as does a download of the download. Not
+    copied: chembl_any/compounds/ (the site's drug pages). A release without chembl_any/ is downloaded without it, and
+    its pages have "ChEMBL Strict" only; a damaged file stops the download, as any other."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    listed = json.loads((release / "chembl_any" / "MANIFEST.json").read_text())
+    (release / "chembl_any" / "compounds").mkdir()
+    (release / "chembl_any" / "compounds" / f"{DRUG}.json.gz").write_bytes(gzip.compress(b"{}", mtime=0))
+    data = (release / "chembl_any" / "compounds" / f"{DRUG}.json.gz").read_bytes()
+    (release / "chembl_any" / "MANIFEST.json").write_text(json.dumps(dict(listed, **{
+        f"compounds/{DRUG}.json.gz": [hashlib.sha256(data).hexdigest(), len(data)]}), indent=0))
+    location = release if source == "local" else http_server(release).url
+    out = Path(Atlas(location).download(["ABL1"], tmp_path / "out"))
+    again = Path(Atlas(out).download(["ABL1"], tmp_path / "again"))  # a download of the download
+    for folder in (out, again):
+        copied = {rel for rel in _tree(folder) if rel.startswith("chembl_any/")}
+        assert copied == {"chembl_any/MANIFEST.json", f"chembl_any/proteins/{ABL1}.json.gz",
+                          "chembl_any/strict.json.gz"}
+        for rel in (f"proteins/{ABL1}.json.gz", "strict.json.gz"):
+            assert (folder / "chembl_any" / rel).read_bytes() == (atlas_dir / "chembl_any" / rel).read_bytes()
+        data = (folder / "chembl_any" / "MANIFEST.json").read_bytes()
+        assert json.loads(data) == {rel: listed[rel] for rel in (f"proteins/{ABL1}.json.gz", "strict.json.gz")}
+        assert json.loads((folder / "MANIFEST.json").read_text())["files"]["chembl_any/MANIFEST.json"] == {
+            "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+        page = Path(Atlas(folder).select(ABL1, DRUG).show(path=tmp_path / f"{folder.name}.html")).read_text("utf-8")
+        columns = workspace.page_payload(page)["proteins"][0]["topColumns"]
+        assert [c["label"] for c in columns] == ["ChEMBL Strict", "ChEMBL Complete"]
+    Atlas(location).download(["EGFR"], out)  # one more protein: chembl_any/MANIFEST.json lists both
+    assert json.loads((out / "chembl_any" / "MANIFEST.json").read_text()) == {
+        rel: listed[rel] for rel in (f"proteins/{ABL1}.json.gz", f"proteins/{EGFR}.json.gz", "strict.json.gz")}
+
+    without = Path(shutil.copytree(atlas_dir, tmp_path / "without", ignore=shutil.ignore_patterns("chembl_any")))
+    location = without if source == "local" else http_server(without).url
+    out = Path(Atlas(location).download(["ABL1"], tmp_path / "out_without"))
+    assert not (out / "chembl_any").exists() and not any(rel.startswith("chembl_any/") for rel in json.loads(
+        (out / "MANIFEST.json").read_text())["files"])
+    page = Path(Atlas(out).select(ABL1, DRUG).show(path=tmp_path / "without.html")).read_text("utf-8")
+    assert [c["label"] for c in workspace.page_payload(page)["proteins"][0]["topColumns"]] == ["ChEMBL Strict"]
+
+    # a chembl_any/MANIFEST.json that is not JSON: a warning, no chembl_any/; an entry that is not [sha256, bytes]:
+    # that file left out
+    wrong = dict(listed, **{f"proteins/{ABL1}.json.gz": ["abc", "12"]})
+    for k, text in enumerate(["{not json", "[]", json.dumps(wrong)]):
+        broken = Path(shutil.copytree(atlas_dir, tmp_path / f"broken{k}"))
+        (broken / "chembl_any" / "MANIFEST.json").write_text(text)
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="pocketvina.atlas"):
+            out = Path(Atlas(broken if source == "local" else http_server(broken).url).download(
+                ["ABL1", "EGFR"], tmp_path / f"out_broken{k}"))
+        names = sorted(rel for rel in _tree(out) if rel.startswith("chembl_any/"))
+        assert names == ([] if k < 2 else ["chembl_any/MANIFEST.json", f"chembl_any/proteins/{EGFR}.json.gz",
+                                           "chembl_any/strict.json.gz"]) and (out / "meta.json").is_file()
+        assert ("are not copied" if k < 2 else "does not list it as [sha256, bytes]") in caplog.text
+
+    damaged = release / "chembl_any" / "proteins" / f"{ABL1}.json.gz"
+    damaged.write_bytes(damaged.read_bytes()[:-1] + b"x")
+    location = release if source == "local" else http_server(release).url
+    with pytest.raises(ValueError, match=f"chembl_any/proteins/{ABL1}.json.gz is damaged .*sha256"):
         Atlas(location).download(["ABL1"], tmp_path / "out_damaged")
     assert not (tmp_path / "out_damaged" / "meta.json").exists()
 
@@ -1368,6 +1454,310 @@ def test_sas_points_missing_or_unreadable(atlas_dir, atlas_server, tmp_path, mon
         assert remote._sas_files is None  # asked again next time
 
 
+def test_chembl_records(atlas_dir, atlas_server, tmp_path, monkeypatch):
+    """What the ChEMBL values of a page need (Atlas._chembl): the protein's records of "ChEMBL Complete"
+    (chembl_any/proteins/<U>.json.gz) and the strict values' links (chembl_any/strict.json.gz), from a folder and over
+    HTTP. Over HTTP the files and chembl_any/MANIFEST.json are kept in the cache: later they are read from there, also
+    without network."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    expected = (_chembl_json(atlas_dir, f"proteins/{ABL1}.json.gz"), _chembl_json(atlas_dir, "strict.json.gz"))
+    assert expected[0]["uniprot"] == ABL1 and DRUG in expected[0]["d"] and DRUG in expected[1]["pvl"]
+    assert Atlas(atlas_dir)._chembl(ABL1) == expected
+    remote = Atlas(atlas_server.url)
+    asked = len(atlas_server.requests)
+    assert remote._chembl(ABL1) == expected
+    assert [r for r, _ in atlas_server.requests[asked:]] == [
+        "chembl_any/MANIFEST.json", f"chembl_any/proteins/{ABL1}.json.gz", "chembl_any/strict.json.gz"]
+    asked = len(atlas_server.requests)
+    assert remote._chembl(EGFR)[0] == _chembl_json(atlas_dir, f"proteins/{EGFR}.json.gz")  # the rest read once
+    assert [r for r, _ in atlas_server.requests[asked:]] == [f"chembl_any/proteins/{EGFR}.json.gz"]
+    asked = len(atlas_server.requests)
+    again = Atlas(atlas_server.url)
+    assert again._chembl(ABL1) == expected
+    assert [r for r, _ in atlas_server.requests[asked:]] == ["meta.json"]  # never from the cache: it names the release
+    again._chembl_files = again._chembl_strict = None  # read again: from the cache
+    _no_network(monkeypatch)
+    assert again._chembl(ABL1) == expected
+
+
+def test_chembl_records_missing_or_unreadable(atlas_dir, atlas_server, tmp_path, monkeypatch, caplog):
+    """No "ChEMBL Complete" (None) for a release without chembl_any/ (an older release or download); no records
+    ({"d": {}}, every value "–", as on the site) for a protein chembl_any/MANIFEST.json does not list. None and a
+    warning when they cannot be read: a damaged file or listing, a file of another protein or not as the release writes
+    it, no network (then asked again next time). The strict values' links: empty without strict.json.gz; empty and a
+    warning when it cannot be read, while "ChEMBL Complete" is still read."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    nothing = {"pvl": {}, "xo": {}}
+    strict = _chembl_json(atlas_dir, "strict.json.gz")
+    without = Path(shutil.copytree(atlas_dir, tmp_path / "without", ignore=shutil.ignore_patterns("chembl_any")))
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    listing = release / "chembl_any" / "MANIFEST.json"
+    listed = json.loads(listing.read_text())
+    listing.write_text(json.dumps({k: v for k, v in listed.items() if k != f"proteins/{EGFR}.json.gz"}))
+    damaged = release / "chembl_any" / "proteins" / f"{PTGS2}.json.gz"
+    damaged.write_bytes(damaged.read_bytes()[:-1] + b"x")
+    with caplog.at_level(logging.WARNING, logger="pocketvina.atlas"):
+        assert Atlas(without)._chembl(ABL1) == (None, nothing)
+        atlas = Atlas(release)
+        assert atlas._chembl(EGFR) == ({"d": {}}, strict)
+        assert atlas._chembl(ABL1)[0]["uniprot"] == ABL1
+        assert not caplog.text
+        assert atlas._chembl(PTGS2) == (None, strict)
+        assert f'{PTGS2}: the page is shown without the "ChEMBL Complete" values' in caplog.text
+        assert "damaged" in caplog.text
+        caplog.clear()
+        good = atlas._chembl_files[f"proteins/{ABL1}.json.gz"]
+        for wrong in ([good[0], None], [good[0], str(good[1])], [good[0]], {"sha256": good[0]}):  # a damaged listing
+            atlas._chembl_files[f"proteins/{ABL1}.json.gz"] = wrong
+            assert atlas._chembl(ABL1) == (None, strict)
+            assert "does not list proteins/" in caplog.text
+            caplog.clear()
+        atlas._chembl_files[f"proteins/{ABL1}.json.gz"] = good
+        record = _chembl_json(atlas_dir, f"proteins/{ABL1}.json.gz")
+        some = next(iter(record["d"]))
+        for k, bad in enumerate([dict(record, uniprot=EGFR), dict(record, d=[]), dict(record, tc=5),
+                                 dict(record, xr="x"), dict(record, d={some: dict(record["d"][some], a="3")}),
+                                 dict(record, d={some: dict(record["d"][some], p=True)}),
+                                 dict(record, d={some: dict(record["d"][some], par="CHEMBL1")}),
+                                 dict(record, d={some: dict(record["d"][some], mn=[])}), ["not", "a", "dict"],
+                                 dict(record, d={some: dict(record["d"][some], p=1e300)}),
+                                 dict(record, d={some: dict(record["d"][some], p=10 ** 400)})]):
+            folder = Path(shutil.copytree(atlas_dir, tmp_path / f"bad{k}"))
+            data = gzip.compress(json.dumps(bad).encode(), mtime=0)
+            (folder / "chembl_any" / "proteins" / f"{ABL1}.json.gz").write_bytes(data)
+            entries = dict(listed, **{f"proteins/{ABL1}.json.gz": [hashlib.sha256(data).hexdigest(), len(data)]})
+            (folder / "chembl_any" / "MANIFEST.json").write_text(json.dumps(entries))
+            assert Atlas(folder)._chembl(ABL1) == (None, strict), k
+            assert "cannot be read" in caplog.text
+            assert ("not the file of" if k in (0, 8) else "not as the release") in caplog.text
+            caplog.clear()
+        for k, text in enumerate(["{not json", "[]"]):  # chembl_any/MANIFEST.json
+            folder = Path(shutil.copytree(atlas_dir, tmp_path / f"listing{k}"))
+            (folder / "chembl_any" / "MANIFEST.json").write_text(text)
+            atlas = Atlas(folder)
+            assert atlas._chembl(ABL1) == (None, nothing) and "cannot be read" in caplog.text
+            assert atlas._chembl_files is None  # read again next time
+            caplog.clear()
+        folder = Path(shutil.copytree(atlas_dir, tmp_path / "nostrict"))  # strict.json.gz: not listed, damaged, wrong
+        (folder / "chembl_any" / "MANIFEST.json").write_text(
+            json.dumps({k: v for k, v in listed.items() if k != "strict.json.gz"}))
+        assert Atlas(folder)._chembl(ABL1) == (record, nothing) and not caplog.text
+        for k, bad in enumerate([b"not gzip", gzip.compress(b'{"pvl": {"PVL1": "x"}}'), gzip.compress(b"[1]")]):
+            (folder / "chembl_any" / "strict.json.gz").write_bytes(bad)
+            (folder / "chembl_any" / "MANIFEST.json").write_text(json.dumps(dict(listed, **{
+                "strict.json.gz": [hashlib.sha256(bad).hexdigest(), len(bad)]})))
+            atlas = Atlas(folder)
+            assert atlas._chembl(ABL1) == (record, nothing) and atlas._chembl_strict is None, k
+            assert 'the "ChEMBL Strict" values of the page have fewer links' in caplog.text
+            caplog.clear()
+        remote = Atlas(atlas_server.url)
+        _no_network(monkeypatch)
+        assert remote._chembl(ABL1) == (None, nothing) and "cannot reach the PocketVina Atlas" in caplog.text
+        assert remote._chembl_files is None  # asked again next time
+
+
+def _make_chembl_again(release: Path) -> dict:
+    """chembl_any/ of ``release`` made again, as the site may do: other records (more activity records, one more
+    "other drug") and a new chembl_any/MANIFEST.json. Returns {path in chembl_any/: parsed new file}."""
+    folder = release / "chembl_any"
+    listed, new = json.loads((folder / "MANIFEST.json").read_text()), {}
+    for rel in listed:
+        new[rel] = data = _chembl_json(release, rel)
+        if rel == "strict.json.gz":
+            data["xo"]["PVL99999"] = "ANOTHER DRUG"
+        else:
+            for rec in data["d"].values():
+                rec["a"] += 1000
+        raw = gzip.compress(json.dumps(data).encode(), mtime=0)
+        (folder / rel).write_bytes(raw)
+        listed[rel] = [hashlib.sha256(raw).hexdigest(), len(raw)]
+    (folder / "MANIFEST.json").write_text(json.dumps(listed, indent=0))
+    return new
+
+
+def test_chembl_records_made_again(atlas_dir, tmp_path, http_server, monkeypatch, caplog):
+    """The site may make chembl_any/ again after the cache got its listing (kept: the release is final). Over HTTP a
+    file that does not match the listing in the cache has the listing fetched again, once per Atlas, and is read
+    again: the page has the new records, with no warning. Until then a file in the cache that matches the old listing
+    is read as it is."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    server = http_server(release)
+    old = Atlas(server.url)._chembl(ABL1)  # the cache gets the listing, strict.json.gz and ABL1's records
+    new = _make_chembl_again(release)
+    with caplog.at_level(logging.WARNING, logger="pocketvina.atlas"):
+        stale = Atlas(server.url)
+        assert stale._chembl(ABL1) == old  # all in the cache, as the cached listing says
+        atlas = Atlas(server.url)
+        asked = len(server.requests)
+        page = atlas._page(EGFR, None)["proteins"][0]  # EGFR's file does not match the cached listing
+        local = Atlas(release)._page(EGFR, None)["proteins"][0]
+        assert page["topColumns"] == local["topColumns"] and len(page["topColumns"]) == 2
+        assert [r["topValues"] for r in page["rows"]] == [r["topValues"] for r in local["rows"]]
+        assert atlas._chembl(EGFR) == (new[f"proteins/{EGFR}.json.gz"], new["strict.json.gz"])
+        assert atlas._chembl(ABL1) == (new[f"proteins/{ABL1}.json.gz"], new["strict.json.gz"])
+        assert [r for r, _ in server.requests[asked:]].count("chembl_any/MANIFEST.json") == 1
+        # the other session: its listing is older than ABL1's file in the cache now, so it fetches the listing too
+        assert stale._chembl(ABL1) == (new[f"proteins/{ABL1}.json.gz"], new["strict.json.gz"])
+    assert not caplog.text
+
+
+def _make_sas_again(release: Path) -> dict:
+    """sas/ of ``release`` made again, as the site may do: other points (one fewer in no pocket) and a new
+    sas/MANIFEST.json. Returns {UniProt: the new points (sas.decode)}."""
+    folder = release / "sas"
+    listed, new = json.loads((folder / "MANIFEST.json").read_text()), {}
+    for name in listed:
+        data = json.loads(gzip.decompress((folder / name).read_bytes()))
+        data["rest"] = data["rest"][:-1]
+        raw = sas.encode(data)
+        (folder / name).write_bytes(raw)
+        listed[name] = [hashlib.sha256(raw).hexdigest(), len(raw)]
+        new[name[:-len(".json.gz")]] = sas.decode(raw)
+    (folder / "MANIFEST.json").write_text(json.dumps(listed, indent=0))
+    return new
+
+
+def test_sas_points_made_again(atlas_dir, tmp_path, http_server, monkeypatch, caplog):
+    """As test_chembl_records_made_again, for sas/ and sas/MANIFEST.json: the page has the new SAS points, with no
+    warning, and the listing is fetched once."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    server = http_server(release)
+    old = Atlas(server.url)._sas(ABL1)  # the cache gets sas/MANIFEST.json and ABL1's points
+    new = _make_sas_again(release)
+    with caplog.at_level(logging.WARNING, logger="pocketvina.atlas"):
+        stale = Atlas(server.url)
+        assert stale._sas(ABL1) == old  # in the cache, as the cached listing says
+        atlas = Atlas(server.url)
+        asked = len(server.requests)
+        page = atlas._page(EGFR, None)["proteins"][0]  # EGFR's file does not match the cached listing
+        assert page["sas"] == Atlas(release)._page(EGFR, None)["proteins"][0]["sas"]
+        assert atlas._sas(EGFR) == new[EGFR] and atlas._sas(ABL1) == new[ABL1]
+        assert [r for r, _ in server.requests[asked:]].count("sas/MANIFEST.json") == 1
+        assert stale._sas(ABL1) == new[ABL1]
+    assert not caplog.text
+
+
+def test_download_after_listings_made_again(atlas_dir, tmp_path, http_server, monkeypatch, caplog):
+    """download() fetches sas/MANIFEST.json and chembl_any/MANIFEST.json from the server first (not the ones in the
+    cache, which may be older): after the site made sas/ and chembl_any/ again its copy is as the new listings say."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    server = http_server(release)
+    atlas = Atlas(server.url)
+    atlas._sas(ABL1), atlas._chembl(ABL1)  # the cache gets the listings
+    _make_sas_again(release)
+    _make_chembl_again(release)
+    with caplog.at_level(logging.WARNING, logger="pocketvina.atlas"):
+        out = Path(Atlas(server.url).download(["ABL1", "EGFR"], tmp_path / "out"))
+    for folder, names in (("sas", [f"{ABL1}.json.gz", f"{EGFR}.json.gz"]),
+                          ("chembl_any", [f"proteins/{ABL1}.json.gz", f"proteins/{EGFR}.json.gz", "strict.json.gz"])):
+        listed = json.loads((release / folder / "MANIFEST.json").read_text())
+        copied = json.loads((out / folder / "MANIFEST.json").read_text())
+        assert copied == {rel: listed[rel] for rel in names}
+        for rel in copied:
+            assert (out / folder / rel).read_bytes() == (release / folder / rel).read_bytes(), rel
+    assert not caplog.text
+
+
+def test_chembl_records_damaged_after_the_listing_is_fetched_again(atlas_dir, tmp_path, http_server, monkeypatch,
+                                                                    caplog):
+    """A file that does not match the listing fetched again either is damaged: a warning, as before, and the listing
+    is fetched at most once per Atlas (never a loop). A folder is read as before (nothing is fetched). Without network
+    a cache with the old listing is read as before."""
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    server = http_server(release)
+    for cache in ("offline", "cache"):  # each cache gets the listing, strict.json.gz and ABL1's records
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / cache))
+        old = Atlas(server.url)._chembl(ABL1)
+    new = _make_chembl_again(release)
+    for uniprot in (EGFR, PTGS2):  # damaged on the server: not the files the new listing lists
+        damaged = release / "chembl_any" / "proteins" / f"{uniprot}.json.gz"
+        damaged.write_bytes(damaged.read_bytes()[:-1] + b"x")
+    with caplog.at_level(logging.WARNING, logger="pocketvina.atlas"):
+        atlas = Atlas(server.url)
+        asked = len(server.requests)
+        assert atlas._chembl(EGFR) == (None, new["strict.json.gz"]) and "damaged" in caplog.text
+        assert atlas._chembl(PTGS2) == (None, new["strict.json.gz"])
+        assert atlas._chembl(EGFR) == (None, new["strict.json.gz"])
+        assert [r for r, _ in server.requests[asked:]].count("chembl_any/MANIFEST.json") == 1
+        assert atlas._chembl(ABL1) == (new[f"proteins/{ABL1}.json.gz"], new["strict.json.gz"])
+        caplog.clear()
+        folder = Atlas(release)
+        assert folder._chembl(EGFR) == (None, new["strict.json.gz"]) and "damaged" in caplog.text
+        assert not folder._fetch_listing_again("chembl_any/MANIFEST.json") and not folder._fetched_again
+        caplog.clear()
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "offline"))
+        offline = Atlas(server.url)
+        assert offline.release == "v1.1"  # meta.json is never read from the cache
+        _no_network(monkeypatch)
+        assert offline._chembl(ABL1) == old and not caplog.text  # in the cache, as the cached listing says
+        assert offline._chembl(EGFR) == (None, old[1]) and "cannot reach the PocketVina Atlas" in caplog.text
+        assert not offline._fetched_again  # no network is not a file that does not match: no listing is fetched
+
+
+def test_sas_points_damaged_after_the_listing_is_fetched_again(atlas_dir, tmp_path, http_server, monkeypatch,
+                                                               caplog):
+    """As test_chembl_records_damaged_after_the_listing_is_fetched_again, for sas/."""
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    server = http_server(release)
+    for cache in ("offline", "cache"):  # each cache gets sas/MANIFEST.json and ABL1's points
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / cache))
+        old = Atlas(server.url)._sas(ABL1)
+    new = _make_sas_again(release)
+    for uniprot in (EGFR, PTGS2):  # damaged on the server: not the files the new listing lists
+        damaged = release / "sas" / f"{uniprot}.json.gz"
+        damaged.write_bytes(damaged.read_bytes()[:-1] + b"x")
+    with caplog.at_level(logging.WARNING, logger="pocketvina.atlas"):
+        atlas = Atlas(server.url)
+        asked = len(server.requests)
+        assert atlas._sas(EGFR) is None and "damaged" in caplog.text
+        assert atlas._sas(PTGS2) is None and atlas._sas(EGFR) is None
+        assert [r for r, _ in server.requests[asked:]].count("sas/MANIFEST.json") == 1
+        assert atlas._sas(ABL1) == new[ABL1]
+        caplog.clear()
+        folder = Atlas(release)
+        assert folder._sas(EGFR) is None and "damaged" in caplog.text
+        assert not folder._fetch_listing_again("sas/MANIFEST.json") and not folder._fetched_again
+        caplog.clear()
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "offline"))
+        offline = Atlas(server.url)
+        assert offline.release == "v1.1"  # meta.json is never read from the cache
+        _no_network(monkeypatch)
+        assert offline._sas(ABL1) == old and not caplog.text  # in the cache, as the cached listing says
+        assert offline._sas(EGFR) is None and "cannot reach the PocketVina Atlas" in caplog.text
+        assert not offline._fetched_again  # no network is not a file that does not match: no listing is fetched
+
+
+def test_listings_fetched_again_keep_the_cache_on_a_bad_answer(atlas_dir, tmp_path, http_server, monkeypatch,
+                                                                caplog):
+    """A listing fetched again that is not a listing (e.g. a Wi-Fi login page) never replaces the one in the cache: a
+    warning, as for a damaged file, and the files the cached listing lists are still read, in a later session too."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    server = http_server(release)
+    first = Atlas(server.url)
+    old = first._sas(ABL1), first._chembl(ABL1)  # the cache gets both listings and ABL1's files
+    page = b"<html><body>Log in to use this network</body></html>"
+    for rel in ("sas/MANIFEST.json", "chembl_any/MANIFEST.json", f"sas/{EGFR}.json.gz",
+                f"chembl_any/proteins/{EGFR}.json.gz"):
+        (release / rel).write_bytes(page)
+    with caplog.at_level(logging.WARNING, logger="pocketvina.atlas"):
+        atlas = Atlas(server.url)
+        assert atlas._sas(EGFR) is None and atlas._chembl(EGFR) == (None, old[1][1])
+        assert caplog.text.count("is not a listing of files (JSON)") == 2
+        assert atlas._fetched_again == {"sas/MANIFEST.json", "chembl_any/MANIFEST.json"}
+        caplog.clear()
+        assert (atlas._sas(ABL1), atlas._chembl(ABL1)) == old
+        later = Atlas(server.url)
+        assert (later._sas(ABL1), later._chembl(ABL1)) == old
+    assert not caplog.text
+    for rel in ("sas/MANIFEST.json", "chembl_any/MANIFEST.json"):
+        assert next((tmp_path / "cache").rglob(rel)).read_bytes() == (atlas_dir / rel).read_bytes()
+    assert not [p for p in (tmp_path / "cache").rglob("*") if ".tmp-" in p.name or ".fetched-" in p.name]
+
+
 # --- the public Atlas ------------------------------------------------------------------------------------------
 
 @pytest.mark.network
@@ -1383,6 +1773,8 @@ def test_public_atlas(tmp_path, monkeypatch):
     assert top and all(block.startswith("MODEL") for block in blocks.values())
     points = atlas._sas(ABL1)  # checked against sas/MANIFEST.json
     assert points["protein"] == ABL1 and list(points["pockets"]) == ["1", "2", "3", "4", "5"] and points["rest"]
+    records, strict = atlas._chembl(ABL1)  # checked against chembl_any/MANIFEST.json
+    assert records["uniprot"] == ABL1 and DRUG in records["d"] and DRUG in strict["pvl"] and DRUG in records["xr"]
 
 
 def test_example_script_runs(atlas_dir, tmp_path):

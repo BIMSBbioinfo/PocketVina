@@ -1,0 +1,18 @@
+{
+"proteins/P00519.json.gz": [
+"1c5333ccf4dbe687d4061ddfdf4ca0f500e20dea2dc0b1ee68ec0abd7d3863f5",
+382
+],
+"proteins/P00533.json.gz": [
+"08afa835f09024032c70fab6ddb9d70ecb07d60711c8c4c262c3356f76ffd972",
+248
+],
+"proteins/P35354.json.gz": [
+"aef0c70e21dc48ccbe524a31c4ba58f7085ebc40fc46d29ddb3e6442304cea9c",
+240
+],
+"strict.json.gz": [
+"506ac47f1f0cb6517b0e10a6a627dcde388cfadb1d146354a77e4b8bb047b6f2",
+167
+]
+}

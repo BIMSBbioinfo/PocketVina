@@ -9,17 +9,31 @@ run time. Expected poses come from ``posefile.Reader`` on the fixture's pose fil
 import gzip
 import html
 import io
+import json
 import os
 import re
+import shutil
 import sys
 import types
+import urllib.parse
 from pathlib import Path
 
 import pytest
 from rdkit import Chem
 
 from pocketvina import pdbqt, workspace
-from pocketvina.atlas import MAX_LIGANDS, NON_DRUG, TOP_HITS, Atlas, _across, _pb
+from pocketvina.atlas import (
+    CHEMBL_COLUMNS,
+    CHEMBL_URL,
+    MAX_LIGANDS,
+    NON_DRUG,
+    TOP_HITS,
+    Atlas,
+    _across,
+    _chembl_cells,
+    _fixed,
+    _pb,
+)
 from pocketvina.io import posefile, sas
 from pocketvina.selection import Selection, pose_name
 
@@ -260,6 +274,8 @@ def test_show_page_data(atlas, atlas_dir, tmp_path, monkeypatch, capsys):
     assert [p["plddt"] for p in prot["pockets"]] == [round(p["plddt"], 1) for p in raw["pockets"]]
     points = sas.decode((atlas_dir / "sas" / f"{ABL1}.json.gz").read_bytes())  # P2Rank's SAS points, without the id
     assert prot["sas"] == {k: points[k] for k in ("pockets", "other_pockets", "rest")} and prot["sas"]["pockets"]
+    assert prot["topColumns"] == [{"label": label, "tip": tip} for label, tip in CHEMBL_COLUMNS]  # the ChEMBL columns
+    assert all(len(item["topValues"]) == 2 for item in prot["rows"])
     assert data["initial"] == {"protein": ABL1, "ligand": None, "view": "best", "pocket": None, "mode": None,
                                "allModes": False, "show": [1, 2, 3, 4, 5], "userShow": False, "tab": "top"}
     checks = atlas.meta["pb_checks"]
@@ -298,6 +314,161 @@ def test_show_page_data(atlas, atlas_dir, tmp_path, monkeypatch, capsys):
     ensembl = raw["open_targets"]["ensembl_id"]
     assert all(d["href"].startswith(f"https://platform.opentargets.org/evidence/{ensembl}/") for d in diseases["items"])
     assert diseases["all"]["href"] == f"https://platform.opentargets.org/target/{ensembl}/associations"
+
+
+ACTIVITIES = "https://www.ebi.ac.uk/chembl/explore/activities/QUERYSTRING:"
+NO_RECORD = {"text": "–", "tip": "No ChEMBL record of this drug (or its salt forms) on this protein", "mut": True}
+
+
+def chembl_file(atlas_dir, rel):
+    return json.loads(gzip.decompress((atlas_dir / "chembl_any" / rel).read_bytes()))
+
+
+def query(href):
+    """The query of a link to ChEMBL's activity records."""
+    assert href.startswith(ACTIVITIES)
+    return urllib.parse.unquote(href[len(ACTIVITIES):])
+
+
+def row_of(page, cidx):
+    return next(r for r in page["proteins"][0]["rows"] if r["lig"] == cidx)
+
+
+def test_show_chembl_values(atlas, atlas_dir):
+    """Each row of Top hits has the Atlas site's two ChEMBL values: "ChEMBL Strict" from the row's flags (1 MoA,
+    2 assay, 4 weak, else "–"), "ChEMBL Complete" from the protein's records (chembl_any/proteins/<U>.json.gz: MoA
+    with a mechanism, else "assay n · p", "–" without a record), each with a tooltip and a link to ChEMBL."""
+    n = 0
+    for protein in (ABL1, EGFR, PTGS2):
+        records = chembl_file(atlas_dir, f"proteins/{protein}.json.gz")
+        rows = {row["cidx"]: row for row in top_hits(atlas, protein)[0]}
+        for item in atlas._page(protein, None)["proteins"][0]["rows"]:
+            row, (first, every) = rows[item["lig"]], item["topValues"]
+            flags, rec = row["flags"], records["d"].get(row["pvl"])
+            assert first["text"] == ("MoA" if flags & 1 else "assay" if flags & 2 else "weak" if flags & 4 else "–")
+            if rec is None:
+                assert every == NO_RECORD
+            elif rec["m"]:
+                assert (every["text"], every["href"], every["strong"]) == ("MoA", CHEMBL_URL.format(rec["mc"]), True)
+                assert every["tip"].startswith("ChEMBL mechanism of action: ")
+                assert every["tip"].endswith(" (opens ChEMBL)")
+            else:
+                best = f" · {_fixed(rec['p'])}" if rec["p"] is not None else ""
+                assert (every["text"], every["sub"]) == ("assay", f"{rec['a']}{best}")
+                assert query(every["href"]) == (f"parent_molecule_chembl_id:({' OR '.join(rec['par'])}) AND "
+                                                f"target_chembl_id:({' OR '.join(dict.fromkeys(rec['tc']))})")
+            for cell in (first, every):
+                assert set(cell) <= {"text", "sub", "tip", "href", "strong", "mut"} and cell["tip"]
+                assert cell.get("href", "https://www.ebi.ac.uk/chembl/explore/").startswith(
+                    "https://www.ebi.ac.uk/chembl/explore/")
+            n += 1
+    assert n > 10
+    # the documentation's drug: a mechanism of action on ABL1 (both values open the compound that carries it), strict
+    # assay evidence on EGFR (the activity records of the exact structure's parent on EGFR's ChEMBL targets)
+    on_abl1 = row_of(atlas._page(ABL1, None), atlas._pair(*PAIR).row["cidx"])
+    mc = chembl_file(atlas_dir, f"proteins/{ABL1}.json.gz")["d"][PAIR[1]]["mc"]
+    assert [(c["text"], c["href"]) for c in on_abl1["topValues"]] == [("MoA", CHEMBL_URL.format(mc))] * 2
+    egfr = chembl_file(atlas_dir, f"proteins/{EGFR}.json.gz")
+    rec = egfr["d"][PAIR[1]]
+    first = row_of(atlas._page(EGFR, None), atlas._pair(EGFR, PAIR[1]).row["cidx"])["topValues"][0]
+    assert first["text"] == "assay" and "strong" not in first and "mut" not in first
+    assert first["tip"] == "ChEMBL strict binding-assay evidence (opens the activity records in ChEMBL)"
+    assert query(first["href"]) == (f"parent_molecule_chembl_id:({' OR '.join(rec['xp'])}) AND "
+                                    f"target_chembl_id:({' OR '.join(dict.fromkeys([egfr['tc'], *rec['tc']]))})")
+
+
+def test_show_chembl_values_without_chembl_any(atlas, atlas_dir, tmp_path):
+    """A release or download without chembl_any/ (release/v1.1, a download of PocketVina 0.4.2): "ChEMBL Strict" only,
+    as the site shows it without the records (a value links to the drug's ChEMBL ID); "ChEMBL Complete" is left out,
+    not shown empty. A protein chembl_any/MANIFEST.json does not list: every "ChEMBL Complete" value is "–"."""
+    without = Atlas(shutil.copytree(atlas_dir, tmp_path / "without", ignore=shutil.ignore_patterns("chembl_any")))
+    rows = {row["cidx"]: row for row in top_hits(atlas, ABL1)[0]}
+    (prot,) = without._page(ABL1, None)["proteins"]
+    assert prot["topColumns"] == [{"label": "ChEMBL Strict", "tip": CHEMBL_COLUMNS[0][1]}]
+    full = atlas._page(ABL1, None)
+    for item in prot["rows"]:
+        (cell,) = item["topValues"]
+        row, before = rows[item["lig"]], row_of(full, item["lig"])["topValues"][0]
+        assert (cell["text"], cell["tip"]) == (before["text"], before["tip"])
+        if cell["text"] != "–":
+            assert cell["href"] == CHEMBL_URL.format(atlas._drug_info(row["pvl"], row["cat"]).chembl_id)
+    assert any(item["topValues"][0]["text"] == "MoA" for item in prot["rows"])
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    listing = json.loads((release / "chembl_any" / "MANIFEST.json").read_text())
+    del listing[f"proteins/{ABL1}.json.gz"]
+    (release / "chembl_any" / "MANIFEST.json").write_text(json.dumps(listing))
+    prot = Atlas(release)._page(ABL1, None)["proteins"][0]
+    assert [c["label"] for c in prot["topColumns"]] == ["ChEMBL Strict", "ChEMBL Complete"]
+    assert all(item["topValues"][1] == NO_RECORD for item in prot["rows"])
+
+
+def test_chembl_values_follow_the_sites_rules():
+    """The two values of a row as the site's components/cells.tsx draws them (with what ProteinWorkspace.tsx gives
+    them), on made-up records."""
+    nothing, card = {"pvl": {}, "xo": {}}, CHEMBL_URL.format
+    row = {"pvl": "PVL1", "flags": 16}
+    assert _chembl_cells(row, "CHEMBL5", None, nothing) == [  # no chembl_any/: "ChEMBL Strict" only
+        {"text": "–", "tip": "No ChEMBL evidence (not the same as no binding)", "mut": True}]
+    # MoA before assay before weak; without records the links are the drug's ChEMBL ID
+    assert _chembl_cells(dict(row, flags=7), "CHEMBL5", None, nothing) == [{
+        "text": "MoA", "tip": "ChEMBL mechanism of action: a known target of this drug (opens ChEMBL)",
+        "href": card("CHEMBL5"), "strong": True}]
+    assert _chembl_cells(dict(row, flags=6), "CHEMBL5", None, nothing) == [{
+        "text": "assay", "tip": "ChEMBL strict binding-assay evidence (opens the activity records in ChEMBL)",
+        "href": card("CHEMBL5")}]
+    assert _chembl_cells(dict(row, flags=4), "CHEMBL5", None, nothing) == [{
+        "text": "weak", "tip": "ChEMBL permissive assay evidence only (opens the activity records in ChEMBL)",
+        "href": card("CHEMBL5"), "mut": True}]
+    for no_id in (None, "", "chembl5", "CHEMBL5\n", "CHEMBL٥", "CHEMBL5 OR x", "javascript:x"):
+        assert "href" not in _chembl_cells(dict(row, flags=1), no_id, None, nothing)[0]  # only ChEMBL IDs are linked
+    # the protein's records: activity links of the parents (xp: the exact structure's) on its ChEMBL targets
+    rec = {"m": 0, "a": 12, "p": 6.25, "par": ["CHEMBL7", "CHEMBL8"], "xp": ["CHEMBL7"],
+           "tc": ["CHEMBL102", "CHEMBL100"], "mc": "", "mt": []}
+    records = {"uniprot": "P1", "tc": "CHEMBL100", "tca": ["CHEMBL100", "CHEMBL101"], "xr": ["PVL1"],
+               "d": {"PVL1": rec}}
+    first, every = _chembl_cells(dict(row, flags=2), "CHEMBL5", records, nothing)
+    assert first["href"] == (ACTIVITIES + "parent_molecule_chembl_id%3A(CHEMBL7)%20AND%20target_chembl_id%3A("
+                             "CHEMBL100%20OR%20CHEMBL102)")
+    assert every == {
+        "text": "assay", "sub": "12 · 6.3",
+        "tip": "12 activity records, best pChEMBL 6.3 on this protein in ChEMBL (opens them in ChEMBL)",
+        "href": ACTIVITIES + "parent_molecule_chembl_id%3A(CHEMBL7%20OR%20CHEMBL8)%20AND%20target_chembl_id%3A("
+                             "CHEMBL102%20OR%20CHEMBL100)"}
+    for a, p, sub, tip in ((1, None, "1", "1 activity record on"),
+                           (3, 9, "3 · 9.0", "3 activity records, best pChEMBL 9.0 on")):
+        every = _chembl_cells(row, None, dict(records, d={"PVL1": dict(rec, a=a, p=p)}), nothing)[1]
+        assert every["sub"] == sub and every["tip"].startswith(tip)
+    # no record of the pair: "–", and the strict links take strict.json's parents and all the protein's targets (tca);
+    # the exact structure is another drug in ChEMBL: the tooltip says so
+    strict = {"pvl": {"PVL2": ["CHEMBL9"]}, "xo": {"PVL2": "Other DRUG"}}
+    first, every = _chembl_cells({"pvl": "PVL2", "flags": 2}, "CHEMBL5", dict(records, xr=["PVL2"]), strict)
+    assert every == NO_RECORD
+    assert query(first["href"]) == "parent_molecule_chembl_id:(CHEMBL9) AND target_chembl_id:(CHEMBL100 OR CHEMBL101)"
+    exact = (". From the catalogue's exact structure, which ChEMBL records as other drug (the racemate or another "
+             "stereoisomer)")
+    assert first["tip"] == f"ChEMBL strict binding-assay evidence{exact} (opens the activity records in ChEMBL)"
+    # ChEMBL has no record of the exact structure on the protein (not in xr; also an empty xr): the value, no link
+    nowhere = ". ChEMBL 37 has no record of this compound on this protein, so there is nothing to open"
+    for xr in (["PVL1"], []):
+        first = _chembl_cells({"pvl": "PVL2", "flags": 1}, "CHEMBL5", dict(records, xr=xr), strict)[0]
+        assert first == {"text": "MoA", "strong": True,
+                         "tip": f"ChEMBL mechanism of action: a known target of this drug{exact}{nowhere}"}
+    assert "href" in _chembl_cells({"pvl": "PVL2", "flags": 1}, "CHEMBL5", {"d": {}}, strict)[0]  # xr not known
+    # a mechanism of action in "ChEMBL Complete": on a protein complex or family; the record that carries it
+    moa = dict(rec, m=2, a=1, p=None, mc="CHEMBL70", mt=["Mech A", "Mech B"], mn="SALT FORM",
+               mk=["PROTEIN COMPLEX", "OTHER TYPE"], xp=[])
+    first, every = _chembl_cells(dict(row, flags=1), "CHEMBL5", {"tc": None, "d": {"PVL1": moa}}, nothing)
+    kind = ". Recorded on a protein complex / other type target that includes this protein, not on this protein alone"
+    assert every == {"text": "MoA", "tip": f"ChEMBL mechanism of action: Mech A; Mech B (ChEMBL record salt form)"
+                     f"{kind}. 1 activity record (opens ChEMBL)", "href": card("CHEMBL70"), "strong": True}
+    assert first == {"text": "MoA", "tip": f"ChEMBL mechanism of action: a known target of this drug{kind} "
+                     "(opens ChEMBL)", "href": card("CHEMBL70"), "strong": True}
+    for m in (2, 10 ** 19):  # mechanisms without names (no list of m names is made)
+        every = _chembl_cells(row, None, {"d": {"PVL1": dict(moa, m=m, mt=[], mn="", mk=[], mc="")}}, nothing)[1]
+        assert every == {"text": "MoA", "tip": "ChEMBL mechanism of action: . 1 activity record (opens ChEMBL)",
+                         "href": card("CHEMBL7"), "strong": True}
+    # pChEMBL as JavaScript's toFixed(1) writes it: a tie rounds up
+    assert [_fixed(x) for x in (6.25, 6.35, 8.75, 7, 0.05, 10.0)] == ["6.3", "6.3", "8.8", "7.0", "0.1", "10.0"]
 
 
 def test_show_lists_max_ligands(atlas, tmp_path):
@@ -452,6 +623,7 @@ def test_results_pages_have_no_atlas_fields(real_run, tmp_path):
     assert "info" not in data["proteins"][0] and all("plddt" not in p for p in data["proteins"][0]["pockets"])
     assert "topNote" not in data["proteins"][0] and all(r["rank"] >= 1 for r in data["proteins"][0]["rows"])
     assert "sas" not in data["proteins"][0]  # imported results have no SAS points
+    assert "topColumns" not in data["proteins"][0] and all("topValues" not in r for r in data["proteins"][0]["rows"])
     assert all("ids" not in lig for lig in data["ligands"].values())
     assert {"allow-popups", "allow-popups-to-escape-sandbox"} <= set(workspace.SANDBOX.split())
     assert "allow-same-origin" not in workspace.SANDBOX
@@ -461,6 +633,16 @@ def test_page_script_draws_the_atlas_fields_only_when_present():
     js = (Path(workspace.VIEWER_DIR) / "workspace.js").read_text(encoding="utf-8")
     for part in ("D.proteins.some(p => p.info) ?", "if (L.ids) {", "P.pockets.some(p => p.plddt != null)",
                  'target="_blank" rel="noopener noreferrer"', "/^https?:\\/\\//i.test("):
+        assert part in js, part
+    # more columns of Top hits (P.topColumns, r.topValues; an Atlas page: the ChEMBL values): only when present, after
+    # Pocket; values escaped; a link opens in a new tab and does not pick the row
+    for part in ("cols = P.topColumns || [];", "cols = S.prot.topColumns || [];",
+                 "cols.map(c => `<th title=\"${esc(c.tip)}\" data-top-col>${esc(c.label)}</th>`)",
+                 "cols.map((_, i) => valueCell(r.topValues && r.topValues[i])).join('') + `<td class=\"r num\">",
+                 '`<a class="link${cls}" href="${esc(c.href)}" target="_blank" rel="noopener noreferrer"${tip}>',
+                 "esc(c.text) + (c.sub != null ? ` <span class=\"mut\">${esc(c.sub)}</span>` : '')",
+                 "/^https?:\\/\\//i.test(String(c.href || ''))", 'colspan="${6 + cols.length}"',
+                 "if (r && !e.target.closest('a')) choose(r, null, null, 'best');"):
         assert part in js, part
     # the site's words on an Atlas page only: "of N drugs on", "for this compound", "not among the top"
     for part in ("${P.info ? ' drugs' : ''} on", "for this ${P.info ? 'compound' : 'ligand'}",

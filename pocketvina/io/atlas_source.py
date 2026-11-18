@@ -165,6 +165,28 @@ class Source:
         self.copy(rel, target, size=size, sha256=sha256)
         return target
 
+    def _fetch_again(self, path: str) -> None:
+        """Over HTTP: a listing of files (a JSON object) fetched again into the cache, even of a final release, as the
+        site may make it again after the cache got it (sas/ and chembl_any/MANIFEST.json:
+        ``Atlas._fetch_listing_again``). An answer that is not a JSON object (e.g. a Wi-Fi login page) never replaces
+        the copy in the cache: ValueError."""
+        rel = _rel(path)
+        target = self._cache_path(rel)[0]
+        fetched = f"{target}.fetched-{os.getpid()}-{threading.get_ident()}"
+        try:
+            self.copy(rel, fetched)
+            with open(fetched, "rb") as f:
+                try:
+                    listing = json.loads(f.read())
+                except ValueError:
+                    listing = None
+            if not isinstance(listing, dict):
+                raise ValueError(f"{self.location}: {rel} is not a listing of files (JSON)")
+            os.replace(fetched, target)
+        finally:
+            if os.path.exists(fetched):
+                os.unlink(fetched)
+
     def copy(self, path: str, target, size: Optional[int] = None, sha256: Optional[str] = None,
              progress: Optional[Callable[[int], None]] = None) -> Tuple[int, str]:
         """Copy a whole file of the release to ``target`` (a local path), streamed: it is written to a temp file next

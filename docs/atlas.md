@@ -261,6 +261,19 @@ with the pair selected. *Top hits* lists the highest-affinity drugs with a PoseB
 *Selected pair* also has the drug's identifiers, and the page has the protein's information. `path="ABL1.html"` saves
 the page to that file. [3D views](visualisation.md) describes the parts of the page.
 
+Each drug in *Top hits* has the website's two ChEMBL values. Click a value to open it in ChEMBL. The website explains
+[how both are made](https://pocketvina-atlas.mdc-berlin.de/docs/#chembl).
+
+- *ChEMBL Strict*: ChEMBL evidence for this protein–drug pair, by the exact structure and strict rules. MoA: a known
+  mechanism-of-action target. assay: strict binding-assay evidence. weak: permissive assay evidence only. –: none,
+  which is not the same as no binding.
+- *ChEMBL Complete*: every ChEMBL record of this drug on this protein, also from its salt forms and from records of the
+  same structure without stereo; not filtered. Other drugs of the same structure (stereoisomers, the racemate) are not
+  counted. MoA: a mechanism of action; assay n · p: n activity records of any assay, p the best pChEMBL where measured.
+
+*ChEMBL Complete* comes from the release's `chembl_any/` folder, which the public Atlas has. A release folder or a
+download without it, such as one made by PocketVina 0.4.2 or older, shows *ChEMBL Strict* only.
+
 ## Identifiers
 
 `protein=` takes any identifier of a protein: its gene (`"ABL1"`), UniProt accession (`"P00519"`), entry name
@@ -314,7 +327,7 @@ pocketvina atlas download ABL1 EGFR --out my_atlas
 ```{code-block} text
 :class: pv-output
 
-PocketVina Atlas v1.1: 2,774 files, 295.0 MB, for 2 proteins into /path/to/my_atlas
+PocketVina Atlas v1.1: 2,777 files, 295.0 MB, for 2 proteins into /path/to/my_atlas
 /path/to/my_atlas
 ```
 
@@ -334,7 +347,7 @@ atlas.download(proteins=["ABL1", "EGFR"], out="my_atlas")
 ```{code-block} text
 :class: pv-output
 
-PocketVina Atlas v1.1: 2,774 files, 295.0 MB, for 2 proteins into /path/to/my_atlas
+PocketVina Atlas v1.1: 2,777 files, 295.0 MB, for 2 proteins into /path/to/my_atlas
 '/path/to/my_atlas'
 ```
 
@@ -360,7 +373,8 @@ offline.best_scores(protein="ABL1", top=5)
 
 - A download that stopped goes on where it stopped when you run it again.
 - The files are checked against the release's MANIFEST.json (size and sha256; the few files it does not list, by size,
-  and P2Rank's SAS points against sas/MANIFEST.json).
+  P2Rank's SAS points against sas/MANIFEST.json and the ChEMBL records of *ChEMBL Complete* against
+  chembl_any/MANIFEST.json).
 - In the folder, `search` and `best_scores(ligand=...)` list only its proteins.
 
 To read the folder by default, set `POCKETVINA_ATLAS` to its full path, for example

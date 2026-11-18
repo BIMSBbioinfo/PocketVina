@@ -48,6 +48,9 @@ p { margin: 0; }
 .dt .r { text-align: right; }
 .dt th.wrap { white-space: normal; line-height: 1.2; }  /* a long header may wrap */
 .dt .trunc { max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
+/* the values of more columns of Top hits (Atlas pages: the site's ChEMBL values, cells.tsx): MoA bold, weak a grey link */
+.dt .pv-strong { font-weight: 600; }
+.dt .link.mut { color: var(--mut); }
 .scroll-x { overflow-x: auto; max-width: 100%; }
 .kv { display: grid; grid-template-columns: 112px minmax(0, 1fr); column-gap: 16px; font-size: 14px; margin: 16px 0 0; }
 .kv dt { color: var(--mut); }
@@ -246,9 +249,11 @@ p { margin: 0; }
  * protein header, app/protein/[id]/page.tsx and components/OpenTargets.tsx), the pockets' pLDDT (a column in Pockets), the ligands'
  * identifiers (L.ids: rows of label, value, link, tooltip, short text of a collapsed row; ChEMBL ID, ATC, synonyms) and the stored
  * PoseBusters result of each pair's highest-affinity pose (r.pb); the text above Top hits (P.topNote: its rows are the site's Top hits,
- * the PoseBusters-valid drugs; r.rank counts the drugs and is null for a row that is not ranked) and the protein named by its gene in
- * the texts (P.info.title), also in the Python lines: atlas.select(protein=<gene, or P.id for a title of several genes>, ligand=<the
- * drug's name, L.id>). Links open in a new tab (target=_blank, rel=noopener noreferrer), only http(s) addresses.
+ * the PoseBusters-valid drugs; r.rank counts the drugs and is null for a row that is not ranked), more columns of Top hits after Pocket
+ * (P.topColumns: label and tooltip; r.topValues: each row's values; the site's two ChEMBL columns, "ChEMBL Strict" and "ChEMBL
+ * Complete", of its round 15, components/cells.tsx) and the protein named by its gene in the texts (P.info.title), also in the Python lines:
+ * atlas.select(protein=<gene, or P.id for a title of several genes>, ligand=<the drug's name, L.id>). Links open in a new tab
+ * (target=_blank, rel=noopener noreferrer), only http(s) addresses.
  * Test hooks: window.__pvState() (what is selected and shown), __pvViewerLog (viewer-ready / -frame / -drawn), __pocketvinaDraws,
  * __pvLastImage (the last image saved: name, width, height, scale, bytes) and __pvFrame (the 3D frame element). */
 (() => {
@@ -283,6 +288,15 @@ p { margin: 0; }
   // a link of the data (Atlas pages) in a new tab; text only for anything but an http(s) address
   const extLink = (href, html, cls = 'link') => (/^https?:\/\//i.test(String(href || ''))
     ? `<a class="${cls}" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${html}</a>` : html);
+  // a value of the data's own columns of Top hits (Atlas pages, P.topColumns): its text, bold or grey, grey text after it (sub), a tooltip,
+  // and a link in a new tab when it has one (a click on it does not pick the row)
+  const valueCell = c => {
+    if (!c) return '<td class="mut" data-top-value>–</td>';
+    const cls = (c.strong ? ' pv-strong' : '') + (c.mut ? ' mut' : ''), tip = ` title="${esc(c.tip)}"`;
+    const text = esc(c.text) + (c.sub != null ? ` <span class="mut">${esc(c.sub)}</span>` : '');
+    return `<td data-top-value>${/^https?:\/\//i.test(String(c.href || '')) ? `<a class="link${cls}" href="${esc(c.href)}" target="_blank" rel="noopener noreferrer"${tip}>${text}</a>`
+      : `<span class="${cls.trim()}"${tip}>${text}</span>`}</td>`;
+  };
 
   // ------------------------------------------------------------ data: JSON, gzip, base64 (workspace.py _pack)
   async function unpack(id) {
@@ -654,22 +668,25 @@ p { margin: 0; }
       const key = `top:${S.prot.id}`;
       if (body.__pv !== key) {
         body.__pv = key;
-        const P = S.prot, listed = P.rows.filter(r => D.maxLigands == null || r.rank <= D.maxLigands).length;
+        const P = S.prot, listed = P.rows.filter(r => D.maxLigands == null || r.rank <= D.maxLigands).length, cols = P.topColumns || [];
         body.innerHTML = `<div role="tabpanel" aria-label="Top hits"><p class="pv-note">${P.topNote != null ? esc(P.topNote)
           : `Ligands docked into ${esc(protName(P))}, highest affinity (lowest Vina score) first. Pick one to see its poses.`}</p>`
           + `<input type="search" class="pv-search" id="pv-q" placeholder="Search ligands (name or SMILES)" aria-label="Search ligands" value="${esc(S.q)}">`
-          + `<div class="scroll-x"><table class="dt"><thead><tr><th class="r">#</th><th>Ligand</th><th class="r">Vina</th><th>Pocket</th><th class="r">Mode</th><th class="r" title="Ligand efficiency: −Vina / heavy atoms">LE</th></tr></thead>`
+          + `<div class="scroll-x"><table class="dt"><thead><tr><th class="r">#</th><th>Ligand</th><th class="r">Vina</th><th>Pocket</th>`
+          + cols.map(c => `<th title="${esc(c.tip)}" data-top-col>${esc(c.label)}</th>`).join('')
+          + `<th class="r">Mode</th><th class="r" title="Ligand efficiency: −Vina / heavy atoms">LE</th></tr></thead>`
           + `<tbody id="pv-rows"></tbody></table></div>`
           + (P.topNote == null && P.n > listed ? `<p class="pv-note">The top ${int(listed)} of ${int(P.n)} ligands docked into ${esc(protName(P))} (max_ligands=${int(D.maxLigands)}).</p>` : '')
           + `<p class="pv-note">Vina: highest affinity of the pair (its lowest AutoDock Vina score over all pockets and modes, kcal/mol; more negative is better). Pocket and mode of that pose. LE: ligand efficiency.</p></div>`;
       }
       const t = S.q.trim().toLowerCase();
       const text = L => `${L.id} ${L.smiles}` + (L.ids ? ` ${L.ids.map(x => x.value).join(' ')}` : '');   // Atlas pages: also the identifiers
-      const rows = S.prot.rows.filter(r => !t || text(ligOf(r)).toLowerCase().includes(t));
+      const rows = S.prot.rows.filter(r => !t || text(ligOf(r)).toLowerCase().includes(t)), cols = S.prot.topColumns || [];
       set($('pv-rows'), rows.length ? rows.map(r => `<tr data-act="row" data-v="${r.lig}" data-active="${S.row === r}"><td class="r num mut">${r.rank == null ? '–' : r.rank}</td>`
         + `<td class="trunc"><span class="link" title="${esc(ligOf(r).id)}">${esc(ligOf(r).id)}</span></td><td class="r num">${fmt(r.vina)}</td>`
-        + `<td><span style="display:inline-flex;align-items:center;gap:6px" class="mut"><i class="dot"></i>${r.pocket}</span></td><td class="r num">${r.mode}</td>`
-        + `<td class="r num">${fmt(r.le, 2)}</td></tr>`).join('') : `<tr><td colspan="6" class="mut">${S.prot.rows.length ? `No ligand matches “${esc(S.q)}”.` : S.prot.topNote != null ? 'No drug with a PoseBusters-valid pose.' : `No ligand has a pose in ${esc(protName(S.prot))}.`}</td></tr>`);
+        + `<td><span style="display:inline-flex;align-items:center;gap:6px" class="mut"><i class="dot"></i>${r.pocket}</span></td>`
+        + cols.map((_, i) => valueCell(r.topValues && r.topValues[i])).join('') + `<td class="r num">${r.mode}</td>`
+        + `<td class="r num">${fmt(r.le, 2)}</td></tr>`).join('') : `<tr><td colspan="${6 + cols.length}" class="mut">${S.prot.rows.length ? `No ligand matches “${esc(S.q)}”.` : S.prot.topNote != null ? 'No drug with a PoseBusters-valid pose.' : `No ligand has a pose in ${esc(protName(S.prot))}.`}</td></tr>`);
       return;
     }
     // the Python lines keep the focus and their scroll when the tab is drawn again (e.g. once the 3D view has drawn), only while the page
@@ -835,7 +852,7 @@ p { margin: 0; }
     if (!t || !root.contains(t) || t.disabled || t.tagName === 'SELECT' || t.tagName === 'INPUT') return;
     const a = t.dataset.act, v = t.dataset.v;
     if (a === 'tab') { S.tab = v; update(); }
-    else if (a === 'row') { const r = S.prot.rows.find(x => x.lig === Number(v)); if (r) choose(r, null, null, 'best'); }
+    else if (a === 'row') { const r = S.prot.rows.find(x => x.lig === Number(v)); if (r && !e.target.closest('a')) choose(r, null, null, 'best'); }
     else if (a === 'chip') chip(Number(v));
     else if (a === 'pk') choose(S.row, Number(v), 1, 'modes');
     else if (a === 'step') step(Number(v));
