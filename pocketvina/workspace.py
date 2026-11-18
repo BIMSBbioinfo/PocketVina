@@ -15,9 +15,10 @@ See ``pocketvina/viewer/README.md`` for the files and the changes to the site's 
 
 ``Atlas.show`` and ``Selection.show`` of a pair of the PocketVina Atlas build the same page from the Atlas
 (``pocketvina.atlas``), in the same data format with a few more fields, which a page of results does not have: the
-protein's information (``info``), the pockets' pLDDT, the drugs' identifiers (``ids``) and the text above Top hits
-(``topNote``: they are the site's Top hits, the drugs with a PoseBusters-valid pose); each listed pair's PoseBusters
-result (``pb``, of its highest-affinity pose) is the one the Atlas stores.
+protein's information (``info``), the pockets' pLDDT, the drugs' identifiers (``ids``), the text above Top hits
+(``topNote``: they are the site's Top hits, the drugs with a PoseBusters-valid pose) and the site's two ChEMBL values of
+each drug there (``topColumns``, ``topValues``); each listed pair's PoseBusters result (``pb``, of its highest-affinity
+pose) is the one the Atlas stores.
 
 In Jupyter, Colab or VSCode the page is shown as an iframe (``srcdoc``) below the cell, with a line saying to run the
 cell again where the iframe is not drawn (``NotebookView``); elsewhere it is written to an HTML file whose path is

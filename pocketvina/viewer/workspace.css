@@ -40,6 +40,9 @@ p { margin: 0; }
 .dt .r { text-align: right; }
 .dt th.wrap { white-space: normal; line-height: 1.2; }  /* a long header may wrap */
 .dt .trunc { max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
+/* the values of more columns of Top hits (Atlas pages: the site's ChEMBL values, cells.tsx): MoA bold, weak a grey link */
+.dt .pv-strong { font-weight: 600; }
+.dt .link.mut { color: var(--mut); }
 .scroll-x { overflow-x: auto; max-width: 100%; }
 .kv { display: grid; grid-template-columns: 112px minmax(0, 1fr); column-gap: 16px; font-size: 14px; margin: 16px 0 0; }
 .kv dt { color: var(--mut); }

@@ -33,6 +33,7 @@ page of docking results looks as before:
 | `proteins[].rows[].pb` | the PoseBusters row of the highest-affinity pose (also on a results page, where the run has a result) |
 | `proteins[].sas` | P2Rank's SAS points, which the SAS toggle of the Pockets row draws (also on a results page, where the run kept them; without them the toggle is greyed out) |
 | `proteins[].topNote` | the text above Top hits; the rows are the site's Top hits (drugs with a PoseBusters-valid pose), `rank` and `n` count the drugs (`rank` null: not ranked, e.g. a row docked as a salt counterion) |
+| `proteins[].topColumns`, `proteins[].rows[].topValues` | more columns of Top hits, after Pocket, with their tooltips, and each row's values (text, tooltip, link, bold or grey). An Atlas page has the site's two ChEMBL columns there, "ChEMBL Strict" and "ChEMBL Complete" (only when the Atlas has its records) |
 
 On an Atlas page the texts name the protein by its gene (`info.title`) and use the site's words ("rank X of N drugs on
 ABL1", "for this compound"). There `rows[].across` can also be `[null, n, top]`: the protein is not among the drug's

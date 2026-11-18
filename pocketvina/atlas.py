@@ -19,6 +19,7 @@ InChIKey (or its first block) or SMILES (as in the library, docked, or of the pa
 molecule matches). Matching is exact and ignores case. An identifier of several proteins or drugs raises an error
 that lists them; ``atlas.search`` also finds part of a name.
 """
+import decimal
 import gzip
 import hashlib
 import html
@@ -29,6 +30,7 @@ import operator
 import os
 import re
 import threading
+import urllib.parse
 import zlib
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -68,7 +70,8 @@ SUBSET_TABLES = ("compound_entries", "compound_entries_annotated", "compounds", 
 SUBSET_FILES = ("ligand_ids.json", "LICENSE")
 SUBSET_NOTE = ("A part of the PocketVina Atlas, written by pocketvina's Atlas.download(): for these proteins their "
                "files of proteins/, salt_forms/, poses/, poses_redock/, structures/ and sas/ (with sas/MANIFEST.json "
-               "listing them), and from the release every "
+               "listing them) and of chembl_any/proteins/ (their ChEMBL records, with chembl_any/strict.json.gz and a "
+               "chembl_any/MANIFEST.json listing them), and from the release every "
                "drug page (compounds/<PVL>.json.gz), the search files (search/), the tables compound_entries, "
                "compound_entries_annotated, compounds and proteins (tables/), ligand_ids.json and LICENSE (the "
                "data's licence, if the release has one), all as released (byte-identical copies, checked against "
@@ -76,8 +79,8 @@ SUBSET_NOTE = ("A part of the PocketVina Atlas, written by pocketvina's Atlas.do
                "best_scores(ligand=...) lists the proteins of this subset only, from their proteins/<UniProt>.json "
                "rows, and search() lists them and every drug. The identifiers of every protein and drug of the "
                "release are known (a protein outside the subset: an error that says so).")
-_SUBSET_FOLDERS = ("proteins", "salt_forms", "poses", "poses_redock", "structures", "sas", "compounds", "search",
-                   "tables")
+_SUBSET_FOLDERS = ("proteins", "salt_forms", "poses", "poses_redock", "structures", "sas", "chembl_any", "compounds",
+                   "search", "tables")
 _SHOWN = 10  # candidates listed in an "ambiguous identifier" error
 # identifiers that go into a link of a page (the site's checks, lib/keys.ts RX and app/protein/[id]/page.tsx)
 _CHEMBL_ID = re.compile(r"^CHEMBL\d{1,9}$")
@@ -96,6 +99,36 @@ SEARCH_TOP = 20  # rows atlas.search returns by default
 # P2Rank's SAS points of each protein are in sas/<U>.json.gz (pocketvina.io.sas); this file lists them with their
 # sha256 and size, {"<U>.json.gz": [sha256, bytes]} (the release's MANIFEST.json does not list sas/)
 SAS_MANIFEST = "sas/MANIFEST.json"
+# The two ChEMBL values of each drug in Top hits, as on the Atlas site's protein page (its round 15:
+# components/cells.tsx and ProteinWorkspace.tsx; the names of its round 15c). "ChEMBL Strict": the strict evidence of
+# the pair, from the row's flags (meta.json "flags": 1 mechanism of action, 2 strict binding assay, 4 permissive assay
+# only). "ChEMBL Complete": every ChEMBL record of the drug on the protein, from chembl_any/proteins/<U>.json.gz;
+# chembl_any/strict.json.gz has the links of the strict values. chembl_any/MANIFEST.json lists these files as
+# sas/MANIFEST.json does, {"proteins/<U>.json.gz": [sha256, bytes], ...} (the release's MANIFEST.json does not list
+# chembl_any/; a release or download without it has no "ChEMBL Complete")
+CHEMBL_DIR = "chembl_any"
+CHEMBL_MANIFEST = "chembl_any/MANIFEST.json"
+CHEMBL_STRICT = "strict.json.gz"  # in chembl_any/
+CHEMBL_ACTIVITIES_URL = "https://www.ebi.ac.uk/chembl/explore/activities/QUERYSTRING:{}"
+# the columns of Top hits with their tooltips (the site's column texts, ProteinWorkspace.tsx infoTexts)
+CHEMBL_COLUMNS = (
+    ("ChEMBL Strict",
+     "ChEMBL evidence for this protein-drug pair, by the exact structure and strict rules. MoA: a known "
+     "mechanism-of-action target. assay: strict binding-assay evidence. weak: permissive assay evidence only. –: none, "
+     "which is not the same as no binding. Click a value to open it in ChEMBL."),
+    ("ChEMBL Complete",
+     "Every ChEMBL record of this drug on this protein, also from its salt forms and from records of the same "
+     "structure without stereo; not filtered. Other drugs of the same structure (stereoisomers, the racemate) are not "
+     "counted. MoA: a mechanism of action; assay n · p: n activity records of any assay, p the best pChEMBL where "
+     "measured. Click to open them in ChEMBL."),
+)
+# ChEMBL target types of a mechanism that is not on the protein alone, as the site names them (cells.tsx KIND)
+_TARGET_KINDS = {
+    "PROTEIN COMPLEX": "a protein complex", "PROTEIN COMPLEX GROUP": "a protein complex group",
+    "PROTEIN FAMILY": "a protein family", "SELECTIVITY GROUP": "a selectivity group",
+    "PROTEIN-PROTEIN INTERACTION": "a protein–protein interaction", "CHIMERIC PROTEIN": "a chimeric protein",
+    "PROTEIN NUCLEIC-ACID COMPLEX": "a protein–nucleic-acid complex",
+}
 # atlas.search ranks a match by the score the Atlas website's search box gives it (components/Search.tsx), so that a
 # query lists proteins and drugs in the same order on both. Proteins: _protein_score. Drugs, per identifier: the score
 # of an exact match, (score, shortest query) of a match at its start and of one inside it (None: not matched that way);
@@ -576,6 +609,9 @@ class Atlas:
         self._hgnc: Optional[Dict[str, List[str]]] = None
         self._page_names: Optional[Dict[str, str]] = None
         self._sas_files: Optional[Dict[str, list]] = None  # sas/MANIFEST.json, read on first use
+        self._chembl_files: Optional[Dict[str, list]] = None  # chembl_any/MANIFEST.json, read on first use
+        self._chembl_strict: Optional[dict] = None  # chembl_any/strict.json.gz, read on first use
+        self._fetched_again: set = set()  # sas/ and chembl_any/ listings fetched again (_fetch_listing_again)
 
     def _read_meta(self) -> dict:
         where = self.source.location
@@ -964,9 +1000,14 @@ class Atlas:
             entry = self._sas_listing().get(f"{uniprot}.json.gz")
             if entry is None:
                 return None
-            if not _sas_entry(entry):
+            if not _manifest_entry(entry):
                 raise ValueError(f"{SAS_MANIFEST} does not list it as [sha256, bytes]")
-            path = self.source.file(f"sas/{uniprot}.json.gz", size=entry[1], sha256=entry[0])
+            try:
+                path = self.source.file(f"sas/{uniprot}.json.gz", size=entry[1], sha256=entry[0])
+            except ValueError:  # not the file the listing says: the listing in the cache may be older than the file
+                if not self._fetch_listing_again(SAS_MANIFEST):
+                    raise
+                return self._sas(uniprot)
             with open(path, "rb") as f:
                 return sas.decode(f.read())
         except FileNotFoundError:
@@ -984,6 +1025,99 @@ class Atlas:
                 listed = {}
             self._sas_files = listed if isinstance(listed, dict) else {}
         return self._sas_files
+
+    def _chembl(self, uniprot: str) -> Tuple[Optional[dict], dict]:
+        """What the ChEMBL values of a protein's Top hits need (``_chembl_cells``): (its "ChEMBL Complete" records,
+        chembl_any/proteins/<U>.json.gz: {"tc", "tca", "xr", "d": {PVL: record}}; the links of the strict values,
+        chembl_any/strict.json.gz: {"pvl": {PVL: [parent ChEMBL IDs]}, "xo": {PVL: name}}), each checked against
+        chembl_any/MANIFEST.json (sha256 and size); over HTTP the files are kept in the cache. The records are None when
+        the release has no chembl_any/ (an older release or download: the page has no "ChEMBL Complete"), or when they
+        cannot be read now, e.g. without network, or are damaged (a warning); {"d": {}} (no records, as on the site)
+        when chembl_any/MANIFEST.json does not list the protein. The links are empty when there are none."""
+        unreadable = (OSError, ValueError, EOFError, zlib.error)
+        try:
+            if not self._chembl_listing():
+                return None, {"pvl": {}, "xo": {}}
+        except unreadable as e:
+            logger.warning('%s: the page is shown without the "ChEMBL Complete" values, which cannot be read: %s',
+                           uniprot, e)
+            return None, {"pvl": {}, "xo": {}}
+        try:
+            records = self._chembl_json(f"proteins/{uniprot}.json.gz")
+            if records is not None:
+                _check_chembl_any(records, uniprot)
+        except unreadable as e:
+            logger.warning('%s: the page is shown without the "ChEMBL Complete" values, which cannot be read: %s',
+                           uniprot, e)
+            records = None
+        else:
+            records = records if records is not None else {"d": {}}
+        return records, self._strict_links()
+
+    def _chembl_listing(self) -> dict:
+        """chembl_any/MANIFEST.json, {"<path in chembl_any/>": [sha256, bytes]}, read once; {} when the release has no
+        chembl_any/. ValueError if it is not such a listing (then it is read again next time)."""
+        if self._chembl_files is None:
+            try:
+                listed = self.source.json(CHEMBL_MANIFEST)
+            except FileNotFoundError:
+                listed = {}
+            if not isinstance(listed, dict):
+                raise ValueError(f"{CHEMBL_MANIFEST} is not a listing of files")
+            self._chembl_files = listed
+        return self._chembl_files
+
+    def _chembl_json(self, rel: str):
+        """A file of chembl_any/ (``rel``: its path there, e.g. "strict.json.gz"), checked against
+        chembl_any/MANIFEST.json and parsed; None if the listing does not have it."""
+        entry = self._chembl_listing().get(rel)
+        if entry is None:
+            return None
+        if not _manifest_entry(entry):
+            raise ValueError(f"{CHEMBL_MANIFEST} does not list {rel} as [sha256, bytes]")
+        try:
+            path = self.source.file(f"{CHEMBL_DIR}/{rel}", size=entry[1], sha256=entry[0])
+        except ValueError:  # not the file the listing says: the listing in the cache may be older than the file
+            if not self._fetch_listing_again(CHEMBL_MANIFEST):
+                raise
+            return self._chembl_json(rel)
+        with open(path, "rb") as f:
+            data = f.read()
+        return json.loads(gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data)
+
+    def _fetch_listing_again(self, listing: str) -> bool:
+        """Over HTTP, once per Atlas: a listing (SAS_MANIFEST or CHEMBL_MANIFEST) fetched again from the server into
+        the cache, as the site may have made its folder again since the cache got it (download() does it first; a
+        page, when a file does not match the listing). The listing and what was read with it are then read again.
+        False for a folder, or when it was done already (a file that still does not match is damaged). ValueError
+        when the answer is not a listing (the one in the cache is kept), OSError without network."""
+        if self.source.url is None or listing in self._fetched_again:
+            return False
+        self._fetched_again.add(listing)
+        try:
+            self.source._fetch_again(listing)
+        except FileNotFoundError:  # the release has no such folder
+            pass
+        if listing == SAS_MANIFEST:
+            self._sas_files = None
+        else:
+            self._chembl_files = self._chembl_strict = None
+        return True
+
+    def _strict_links(self) -> dict:
+        """chembl_any/strict.json.gz, {"pvl": {PVL: [parent ChEMBL IDs]}, "xo": {PVL: name}}, read once: the links of
+        the strict ChEMBL values and the other drug a value's structure is. Empty without it, and when it cannot be
+        read now (a warning; read again next time): the strict values then link as on a release without
+        chembl_any/."""
+        if self._chembl_strict is None:
+            try:
+                links = _check_strict(self._chembl_json(CHEMBL_STRICT))
+            except (OSError, ValueError, EOFError, zlib.error) as e:
+                logger.warning('the "ChEMBL Strict" values of the page have fewer links: %s/%s cannot be read: %s',
+                               CHEMBL_DIR, CHEMBL_STRICT, e)
+                return {"pvl": {}, "xo": {}}
+            self._chembl_strict = links
+        return self._chembl_strict
 
     def _structure(self, data: dict) -> str:
         """PDB text of the AlphaFold model the drugs were docked into (structures/<AF id>.pdb.gz of the release, or
@@ -1109,10 +1243,11 @@ class Atlas:
         pLDDT, information, P2Rank's SAS points when the release has them) and its Top hits as the Atlas site lists
         them (its rows of drugs whose highest-affinity pose is PoseBusters-valid, best first; ``max_ligands`` of them),
         and ``pair``'s row if it is not among them, each with its poses in every pocket, its top pose (SDF), its stored
-        PoseBusters result and its drug's identifiers. As on the site, ``rank`` and ``n`` count the protein's rows of
-        drugs (a row docked as something else than a drug, or a catalogue number's own run, has no rank). The rows'
-        poses (``pose_records``: two rounds of reads), their drug pages, the structure and the SAS points are fetched
-        at the same time (``PAGE_THREADS``)."""
+        PoseBusters result, its drug's identifiers and the site's two ChEMBL values (``topValues``: "ChEMBL Strict"
+        and, when the release has chembl_any/, "ChEMBL Complete"; the protein's ``topColumns`` names them). As on the
+        site, ``rank`` and ``n`` count the protein's rows of drugs (a row docked as something else than a drug, or a
+        catalogue number's own run, has no rank). The rows' poses (``pose_records``: two rounds of reads), their drug
+        pages, the structure, the SAS points and the ChEMBL records are fetched at the same time (``PAGE_THREADS``)."""
         from .workspace import _initial, _page_sas, ligand_svg
 
         data = self._protein_json(uniprot)
@@ -1143,6 +1278,7 @@ class Atlas:
                 if not later:
                     later.append(pool.submit(self._structure, data))
                     later.append(pool.submit(self._sas, uniprot))
+                    later.append(pool.submit(self._chembl, uniprot))
                     later.extend(pool.submit(drug, row) for row in listed)
 
             def first_round_first(fn, items):
@@ -1152,8 +1288,8 @@ class Atlas:
 
             poses = self._poses([(*_pose_ref(data, row), row) for row in listed], first_round_first)
             ask_later()
-            structure, points = later[0].result(), later[1].result()
-            drugs_of_rows = [future.result() for future in later[2:]]
+            structure, points, (records, strict) = later[0].result(), later[1].result(), later[2].result()
+            drugs_of_rows = [future.result() for future in later[3:]]
         checks, statuses = list(self.meta.get("pb_checks") or []), list(self.meta.get("pb_status") or [])
         items, ligands = [], {}
         for row, (blocks, top), (info, across) in zip(listed, poses, drugs_of_rows):
@@ -1167,7 +1303,8 @@ class Atlas:
                           "mode": int(row["mode"]), "le": _num(row["le"], 3), "rank": rank_of.get(row["cidx"]),
                           # as on the site, not for an entry's own run (the drug page ranks the drug's runs)
                           "across": across if row["cidx"] in canonical else None,
-                          "sdf": _text(top) if top else None, "pockets": pockets, "pb": _pb(row, checks, statuses)})
+                          "sdf": _text(top) if top else None, "pockets": pockets, "pb": _pb(row, checks, statuses),
+                          "topValues": _chembl_cells(row, info.chembl_id, records, strict)})
             smiles = info.library_smiles or info.docked_smiles
             ligands[str(int(row["cidx"]))] = {
                 "id": info.name or row["pvl"], "smiles": smiles, "docked": info.docked_smiles,
@@ -1185,6 +1322,7 @@ class Atlas:
                    "info": _protein_info(data, self.meta)}
         if points is not None:
             protein["sas"] = _page_sas(points)
+        protein["topColumns"] = _chembl_columns(records is not None)  # the ChEMBL columns of Top hits
         return {"format": 1, "proteins": [protein], "ligands": ligands, "maxLigands": max_ligands,
                 "initial": _initial(None, uniprot, docked)}
 
@@ -1206,8 +1344,10 @@ class Atlas:
 
         Returns the folder's path. Every file is a byte-identical copy of the release's file, checked against the
         release's MANIFEST.json (size and sha256; salt_forms/ and LICENSE, which it does not list, by size; the SAS
-        points sas/<U>.json.gz against sas/MANIFEST.json, which the folder gets for its proteins). In the folder,
-        best_scores(ligand=...) and search() list its proteins only (and every drug).
+        points sas/<U>.json.gz against sas/MANIFEST.json, and the ChEMBL records of "ChEMBL Complete"
+        chembl_any/proteins/<U>.json.gz and chembl_any/strict.json.gz against chembl_any/MANIFEST.json: the folder gets
+        both listings for its files). In the folder, best_scores(ligand=...) and search() list its proteins only (and
+        every drug).
         The folder carries the release's LICENSE (the licence of the data), if the release has one.
         """
         uniprots = self._protein_list(proteins)
@@ -1220,19 +1360,23 @@ class Atlas:
               f"protein{'s' if len(uniprots) != 1 else ''} into {out}"
               + (f" ({there:,} of them there already: kept if their sha256 is right)" if there else ""), flush=True)
         copied = self._copy_files(files, out, total)
-        # sas/MANIFEST.json of the folder: its proteins' SAS files, as the release lists them (Atlas._sas reads it)
-        sas_listed = {rel[4:]: [digest, n] for rel, (n, digest) in copied.items() if rel.startswith("sas/")}
-        sas_manifest = json.dumps(dict(sorted(sas_listed.items())), indent=0).encode("utf-8") if sas_listed else None
-        if sas_manifest:
-            _write_bytes(os.path.join(out, *SAS_MANIFEST.split("/")), sas_manifest)
+        # sas/MANIFEST.json and chembl_any/MANIFEST.json of the folder: its files there, as the release lists them
+        # (Atlas._sas and Atlas._chembl read them)
+        listings = {}
+        for folder, name in (("sas", SAS_MANIFEST), (CHEMBL_DIR, CHEMBL_MANIFEST)):
+            entries = {rel[len(folder) + 1:]: [digest, n] for rel, (n, digest) in copied.items()
+                       if rel.startswith(folder + "/")}
+            if entries:
+                listings[name] = json.dumps(dict(sorted(entries.items())), indent=0).encode("utf-8")
+                _write_bytes(os.path.join(out, *name.split("/")), listings[name])
         subset = {"proteins": uniprots, "of": self.source.location, "release": self.release,
                   "created": datetime.now(timezone.utc).isoformat(timespec="seconds"), "pocketvina": __version__,
                   "note": SUBSET_NOTE}
         meta = (json.dumps(dict(self.meta, subset=subset), indent=1, ensure_ascii=False) + "\n").encode("utf-8")
         listed = {rel: {"bytes": n, "sha256": digest} for rel, (n, digest) in copied.items()}
         listed["meta.json"] = {"bytes": len(meta), "sha256": hashlib.sha256(meta).hexdigest()}
-        if sas_manifest:
-            listed[SAS_MANIFEST] = {"bytes": len(sas_manifest), "sha256": hashlib.sha256(sas_manifest).hexdigest()}
+        for name, data in listings.items():
+            listed[name] = {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
         manifest = {"release": self.release, "subset": subset, "files": dict(sorted(listed.items()))}
         _write_bytes(os.path.join(out, "MANIFEST.json"), (json.dumps(manifest, indent=1) + "\n").encode("utf-8"))
         _write_bytes(os.path.join(out, "meta.json"), meta)  # last: the folder is a release once it has meta.json
@@ -1256,7 +1400,9 @@ class Atlas:
         """The files of a download of these proteins: path -> (bytes, sha256) as the release's MANIFEST.json lists
         them; for a file it does not list (salt_forms/, LICENSE), its size and None. salt_forms/ and LICENSE are left
         out if the source does not have them (LICENSE even if its MANIFEST.json lists it, as a download's does). The
-        proteins' SAS points (sas/<U>.json.gz) as sas/MANIFEST.json lists them, if the source has them."""
+        proteins' SAS points (sas/<U>.json.gz) as sas/MANIFEST.json lists them, and their ChEMBL records
+        (chembl_any/proteins/<U>.json.gz, with chembl_any/strict.json.gz) as chembl_any/MANIFEST.json lists them, if
+        the source has them."""
         try:
             listed = self.source.json("MANIFEST.json")["files"]
         except FileNotFoundError:
@@ -1285,17 +1431,32 @@ class Atlas:
                 if not (rel.startswith("salt_forms/") or rel == "LICENSE"):
                     raise
         try:
+            self._fetch_listing_again(SAS_MANIFEST)  # over HTTP the server's listing, not an older one in the cache
             sas_files = self._sas_listing()
         except ValueError as e:  # not JSON: the download goes on without them
             logger.warning("the SAS points (sas/) are not copied: %s cannot be read: %s", SAS_MANIFEST, e)
             sas_files = {}
         for uniprot in uniprots:
             entry = sas_files.get(f"{uniprot}.json.gz")
-            if entry is not None and _sas_entry(entry):
+            if entry is not None and _manifest_entry(entry):
                 files[f"sas/{uniprot}.json.gz"] = (entry[1], entry[0])
             elif entry is not None:
                 logger.warning("%s: not copied, %s does not list it as [sha256, bytes]", f"sas/{uniprot}.json.gz",
                                SAS_MANIFEST)
+        try:
+            self._fetch_listing_again(CHEMBL_MANIFEST)
+            chembl_files = self._chembl_listing()
+        except ValueError as e:  # not a listing: the download goes on without them
+            logger.warning('the ChEMBL records of "ChEMBL Complete" (%s/) are not copied: %s cannot be read: %s',
+                           CHEMBL_DIR, CHEMBL_MANIFEST, e)
+            chembl_files = {}
+        for rel in [f"proteins/{uniprot}.json.gz" for uniprot in uniprots] + [CHEMBL_STRICT]:
+            entry = chembl_files.get(rel)
+            if entry is not None and _manifest_entry(entry):
+                files[f"{CHEMBL_DIR}/{rel}"] = (entry[1], entry[0])
+            elif entry is not None:
+                logger.warning("%s: not copied, %s does not list it as [sha256, bytes]", f"{CHEMBL_DIR}/{rel}",
+                               CHEMBL_MANIFEST)
         return files
 
     def _copy_files(self, files: Dict[str, Tuple[Optional[int], Optional[str]]], out: str,
@@ -1374,8 +1535,8 @@ def _earlier_download(out: str, release: str) -> List[str]:
     return []
 
 
-def _sas_entry(entry) -> bool:
-    """Whether an entry of sas/MANIFEST.json is [sha256, bytes]."""
+def _manifest_entry(entry) -> bool:
+    """Whether an entry of sas/MANIFEST.json or chembl_any/MANIFEST.json is [sha256, bytes]."""
     return (isinstance(entry, list) and len(entry) == 2 and isinstance(entry[0], str) and isinstance(entry[1], int)
             and not isinstance(entry[1], bool))
 
@@ -1559,6 +1720,173 @@ def _diseases(ot: Optional[dict]) -> Optional[dict]:
                        "href": OPEN_TARGETS_EVIDENCE_URL.format(ensembl, d["id"])} for d in diseases],
             "all": {"text": "View all associations on Open Targets", "href": OPEN_TARGETS_URL.format(ensembl)},
             "note": f"Open Targets Platform{release} · overall association score{association}"}
+
+
+# --- the ChEMBL values of Top hits (the Atlas site's round 15: components/cells.tsx, ProteinWorkspace.tsx) ----------
+
+_CHEMBL_LINK = re.compile(r"CHEMBL[0-9]+")  # what goes into a link to ChEMBL (lib/client.ts CHEMBL_ID)
+
+
+def _chembl_columns(every_record: bool) -> List[dict]:
+    """The ChEMBL columns of Top hits with their tooltips: "ChEMBL Strict", and "ChEMBL Complete" when the release has
+    chembl_any/ (else it is left out: an empty column would read as "no records")."""
+    return [{"label": label, "tip": tip} for label, tip in CHEMBL_COLUMNS[:2 if every_record else 1]]
+
+
+def _chembl_cells(row: dict, chembl_id: Optional[str], records: Optional[dict], strict: dict) -> List[dict]:
+    """The ChEMBL values of a row of Top hits, from the data the site's protein page gives its two ChEMBL cells
+    (ProteinWorkspace.tsx): "ChEMBL Strict", then "ChEMBL Complete" unless ``records`` is None. ``chembl_id``: the
+    ChEMBL ID of the row's catalogue number, the strict value's link where chembl_any/ has none; ``records``,
+    ``strict``: ``Atlas._chembl``."""
+    pvl = row["pvl"]
+    found = records["d"].get(pvl) if records is not None else None  # its "ChEMBL Complete" record (site: anyRec)
+    rec, protein = found or {}, records or {}
+    listed = strict["pvl"].get(pvl)
+    parents = rec["xp"] if rec.get("xp") else listed if listed is not None else [chembl_id or ""]
+    targets = [protein.get("tc") or "", *(rec.get("tc") or [])]
+    if found is None:  # the protein's other ChEMBL targets (complexes, families) where "ChEMBL Complete" has no record
+        targets += protein.get("tca") or []
+    xr = protein.get("xr")  # drugs whose exact structure has ChEMBL records on the protein (None: not known)
+    cells = [_strict_cell(int(row.get("flags") or 0), parents, targets, rec.get("mc") or "", rec.get("mk") or [],
+                          strict["xo"].get(pvl) or "", xr is not None and pvl not in xr)]
+    if records is not None:
+        cells.append(_any_cell(found))
+    return cells
+
+
+def _strict_cell(flags: int, parents: List[str], targets: List[str], moa_card: str, moa_kind: List[str],
+                 exact_as: str, no_record: bool) -> dict:
+    """The "ChEMBL Strict" value (cells.tsx ChemblCell): MoA (flag 1), assay (2) or weak (4) of the exact structure,
+    else "–". MoA opens the ChEMBL page of the compound that carries the mechanism, assay and weak the activity records
+    of the parent compounds on the protein's ChEMBL targets. ``exact_as``: the other drug ChEMBL records the
+    catalogue's exact structure as; ``no_record``: ChEMBL has no record of it on the protein (no link)."""
+    if not flags & 7:
+        return _cell("–", "No ChEMBL evidence (not the same as no binding)", mut=True)
+    exact = (f". From the catalogue's exact structure, which ChEMBL records as {exact_as.lower()} (the racemate or "
+             f"another stereoisomer)") if exact_as else ""
+    if flags & 1:
+        text, what = "MoA", f"ChEMBL mechanism of action: a known target of this drug{_on_kind(moa_kind)}"
+        href = _compound_url(moa_card or (parents[0] if parents else ""))
+    else:
+        text = "assay" if flags & 2 else "weak"
+        what = "ChEMBL strict binding-assay evidence" if flags & 2 else "ChEMBL permissive assay evidence only"
+        href = _activities_url(parents, targets)
+    if no_record:
+        tip = f"{what}{exact}. ChEMBL 37 has no record of this compound on this protein, so there is nothing to open"
+        return _cell(text, tip, strong=bool(flags & 1), mut=not flags & 3)
+    tip = f"{what}{exact} (opens {'ChEMBL' if flags & 1 else 'the activity records in ChEMBL'})"
+    return _cell(text, tip, href, strong=bool(flags & 1), mut=not flags & 3)
+
+
+def _any_cell(rec: Optional[dict]) -> dict:
+    """The "ChEMBL Complete" value (cells.tsx ChemblAnyCell) of a record of chembl_any/proteins/<U>.json, or "–" without
+    one: MoA (a mechanism of action; opens the ChEMBL page of the compound that carries it) or "assay n · p" (n activity
+    records, p the best pChEMBL; opens them in ChEMBL)."""
+    if rec is None:
+        return _cell("–", "No ChEMBL record of this drug (or its salt forms) on this protein", mut=True)
+    mechanisms = rec.get("mt") or []  # the mechanisms' names; "m" counts the mechanisms, also those without one
+    n, p, parents = rec["a"], rec.get("p"), rec.get("par") or []
+    acts = (f"{n} activity record{'' if n == 1 else 's'}" + (f", best pChEMBL {_fixed(p)}" if p is not None else "")
+            if n else "")
+    if mechanisms or rec["m"]:
+        carrier = f" (ChEMBL record {rec['mn'].lower()})" if rec.get("mn") else ""
+        tip = (f"ChEMBL mechanism of action: {'; '.join(m for m in mechanisms if m)}{carrier}"
+               f"{_on_kind(rec.get('mk') or [])}{f'. {acts}' if acts else ''} (opens ChEMBL)")
+        return _cell("MoA", tip, _compound_url(rec.get("mc") or (parents[0] if parents else "")), strong=True)
+    return _cell("assay", f"{acts} on this protein in ChEMBL (opens them in ChEMBL)",
+                 _activities_url(parents, rec.get("tc") or []), sub=f"{n}{f' · {_fixed(p)}' if p is not None else ''}")
+
+
+def _cell(text: str, tip: str, href: str = "", *, strong: bool = False, mut: bool = False,
+          sub: Optional[str] = None) -> dict:
+    """A ChEMBL value of the page: its text, tooltip, the link to ChEMBL if it has one, bold (MoA) or grey, and grey
+    text after it ("sub")."""
+    cell = {"text": text, "tip": tip}
+    if sub is not None:
+        cell["sub"] = sub
+    if href:
+        cell["href"] = href
+    if strong:
+        cell["strong"] = True
+    if mut:
+        cell["mut"] = True
+    return cell
+
+
+def _on_kind(kinds: List[str]) -> str:
+    """The tooltip's note when every mechanism sits on a protein complex / family target that includes the protein."""
+    if not kinds:
+        return ""
+    names = " / ".join(_TARGET_KINDS.get(k) or k.lower() for k in kinds)
+    return f". Recorded on {names} target that includes this protein, not on this protein alone"
+
+
+def _fixed(x) -> str:
+    """A number with one decimal as the site writes it (JavaScript's toFixed(1): a tie rounds up, 6.25 -> 6.3)."""
+    value = decimal.Decimal(float(x) + 0.0).quantize(decimal.Decimal("0.1"), rounding=decimal.ROUND_HALF_UP)
+    return f"{value:f}"
+
+
+def _compound_url(chembl_id: str) -> str:
+    """A compound's page in ChEMBL (its report card, with its mechanisms of action); "" for anything but a ChEMBL ID
+    (lib/client.ts chemblCompoundUrl)."""
+    return CHEMBL_URL.format(chembl_id) if _CHEMBL_LINK.fullmatch(chembl_id) else ""
+
+
+def _activities_url(parents: List[str], targets: List[str]) -> str:
+    """The activity records of these parent compounds on these targets in ChEMBL (lib/client.ts chemblActivitiesUrl):
+    the first compound's page without a target, "" without a compound. Only ChEMBL IDs go into the address."""
+    compounds = [x for x in dict.fromkeys(parents) if _CHEMBL_LINK.fullmatch(x)]
+    on = [x for x in dict.fromkeys(targets) if _CHEMBL_LINK.fullmatch(x)]
+    if not compounds:
+        return ""
+    if not on:
+        return _compound_url(compounds[0])
+    query = f"parent_molecule_chembl_id:({' OR '.join(compounds)}) AND target_chembl_id:({' OR '.join(on)})"
+    return CHEMBL_ACTIVITIES_URL.format(urllib.parse.quote(query, safe="-_.!~*'()"))  # as encodeURIComponent
+
+
+def _strs(value) -> bool:
+    return isinstance(value, list) and all(isinstance(x, str) for x in value)
+
+
+def _count(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _pchembl(value) -> bool:
+    """Whether a best pChEMBL is a number the page can write (ChEMBL's are about 1 to 15)."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and abs(value) < 1000
+
+
+def _check_chembl_any(data, uniprot: str) -> None:
+    """ValueError unless ``data`` is chembl_any/proteins/<uniprot>.json as the release writes it (the fields the
+    page reads, with their types)."""
+    if not isinstance(data, dict) or data.get("uniprot") != uniprot:
+        raise ValueError(f"it is not the file of {uniprot}")
+    ok = (isinstance(data.get("d"), dict) and (data.get("tc") is None or isinstance(data["tc"], str))
+          and all(data.get(k) is None or _strs(data[k]) for k in ("tca", "xr")))
+    for rec in data["d"].values() if ok else ():
+        ok = (isinstance(rec, dict) and _count(rec.get("m")) and _count(rec.get("a"))
+              and (rec.get("p") is None or _pchembl(rec["p"]))
+              and all(rec.get(k) is None or _strs(rec[k]) for k in ("par", "xp", "tc", "mt", "mk"))
+              and all(rec.get(k) is None or isinstance(rec[k], str) for k in ("mc", "mn")))
+        if not ok:
+            break
+    if not ok:
+        raise ValueError("its records are not as the release writes them")
+
+
+def _check_strict(data) -> dict:
+    """chembl_any/strict.json as {"pvl": {PVL: [parent ChEMBL IDs]}, "xo": {PVL: name}} ({} each when it has none);
+    ValueError if it is not that."""
+    if data is None:
+        return {"pvl": {}, "xo": {}}
+    pvl, xo = (data.get("pvl") or {}, data.get("xo") or {}) if isinstance(data, dict) else (None, None)
+    if not (isinstance(pvl, dict) and all(_strs(v) for v in pvl.values()) and isinstance(xo, dict)
+            and all(isinstance(v, str) for v in xo.values())):
+        raise ValueError("it is not as the release writes it")
+    return {"pvl": pvl, "xo": xo}
 
 
 def _forms(data: dict) -> List[dict]:

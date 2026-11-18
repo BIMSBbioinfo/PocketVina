@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.3
+
+### Added
+
+- In the page of `Atlas.show()`, each drug in *Top hits* has the Atlas website's two ChEMBL values, *ChEMBL Strict*
+  and *ChEMBL Complete*, with links to ChEMBL. `Atlas.download()` copies the records of *ChEMBL Complete* too.
+
+### Fixed
+
+- After the Atlas website updates its SAS points or ChEMBL records, `Atlas.show()` shows them and `Atlas.download()`
+  copies them, without clearing `~/.cache/pocketvina/atlas` first.
+
 ## 0.4.2
 
 ### Fixed

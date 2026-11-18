@@ -31,6 +31,10 @@ Every file keeps the layout of the release, so the package reads the fixture exa
   sas/<U>.json.gz               P2Rank's SAS points: every point of a pocket, every SAS_REST_STEP-th point in no pocket
   sas/MANIFEST.json             {"<U>.json.gz": [sha256, bytes]} of these files; as in the release, MANIFEST.json does
                                 not list sas/
+  chembl_any/proteins/<U>.json.gz   the ChEMBL records of "ChEMBL Complete", only of the drugs of the fixture's rows
+  chembl_any/strict.json.gz         (its keys "d" and "xr"; "strict.json" filtered the same way)
+  chembl_any/MANIFEST.json      {"<path in chembl_any/>": [sha256, bytes]} of these files (not of compounds/, which the
+                                package does not read); MANIFEST.json does not list chembl_any/, as in the release
 """
 import gzip
 import hashlib
@@ -159,6 +163,7 @@ def build(release):
     cats = sorted(c for c, pvl in entries.items() if pvl in pvls)
     pairs = {}  # (uniprot, cidx of a pf) -> rewritten (top_off, top_len), to fix the compound files
     af_ids = {}
+    row_pvls = {}  # UniProt -> the PVL IDs of its rows (proteins/ and salt_forms/), for chembl_any/
 
     for uniprot, keep in PROTEINS.items():
         data = read_json(os.path.join(release, "proteins", f"{uniprot}.json.gz"))
@@ -187,6 +192,7 @@ def build(release):
         write_json(f"salt_forms/{uniprot}.json.gz",
                    dict(salt, rows=[retop(r, c, tops[r[c["pf"]]]) for r in salt_rows]))
         af_ids[uniprot] = data["af_id"]
+        row_pvls[uniprot] = {r[c["pvl"]] for r in rows + salt_rows}
         name = f"{data['af_id']}.pdb.gz"
         write(f"structures/{name}", open(os.path.join(release, "structures", name), "rb").read())
         print(f"{uniprot}: {len(rows)} rows, {len(salt_rows)} salt_forms rows")
@@ -219,6 +225,7 @@ def build(release):
     write_json("cidx.json", dict(cidx, cidx={c: v for c, v in sorted(cidx["cidx"].items()) if c in cats}))
     tables(release, cats, pvls)
     sas(release)
+    chembl_any(release, row_pvls)
     write_json("meta.json", dict(meta, subset=SUBSET))
     manifest(meta)
 
@@ -300,14 +307,40 @@ def sas(release):
     write("sas/MANIFEST.json", json.dumps(dict(sorted(listed.items())), indent=0).encode("utf-8"))
 
 
+def chembl_any(release, row_pvls):
+    """chembl_any/proteins/<U>.json.gz of the fixture's proteins and chembl_any/strict.json.gz, only with the drugs of
+    the fixture's rows, and chembl_any/MANIFEST.json, written as the release writes them (JSON with indent 0)."""
+    listed = {}
+
+    def put(rel, data):
+        with open(write_json(f"chembl_any/{rel}", data), "rb") as f:
+            raw = f.read()
+        listed[rel] = [hashlib.sha256(raw).hexdigest(), len(raw)]
+        return len(raw)
+
+    for uniprot, pvls in row_pvls.items():
+        data = read_json(os.path.join(release, "chembl_any", "proteins", f"{uniprot}.json.gz"))
+        data["d"] = {pvl: rec for pvl, rec in data["d"].items() if pvl in pvls}
+        data["xr"] = [pvl for pvl in data.get("xr") or [] if pvl in pvls]
+        size = put(f"proteins/{uniprot}.json.gz", data)
+        print(f"chembl_any/proteins/{uniprot}.json.gz: {len(data['d'])} drugs with records, {size} bytes")
+    every = set().union(*row_pvls.values())
+    strict = read_json(os.path.join(release, "chembl_any", "strict.json.gz"))
+    strict = {key: {pvl: v for pvl, v in strict[key].items() if pvl in every} for key in ("pvl", "xo")}
+    size = put("strict.json.gz", strict)
+    print(f"chembl_any/strict.json.gz: {len(strict['pvl'])} drugs, {len(strict['xo'])} of another drug, {size} bytes")
+    write("chembl_any/MANIFEST.json", json.dumps(dict(sorted(listed.items())), indent=0).encode("utf-8"))
+
+
 def manifest(meta):
-    """MANIFEST.json of the fixture: every file written but sas/ (as in the release), with its bytes and sha256."""
+    """MANIFEST.json of the fixture: every file written but sas/ and chembl_any/ (as in the release), with its bytes and
+    sha256."""
     files = {}
     for folder, _, names in os.walk(OUT):
         for name in names:
             path = os.path.join(folder, name)
             rel = os.path.relpath(path, OUT).replace(os.sep, "/")
-            if rel in ("MANIFEST.json",) or rel.startswith("sas/"):
+            if rel in ("MANIFEST.json",) or rel.startswith(("sas/", "chembl_any/")):
                 continue
             with open(path, "rb") as f:
                 data = f.read()
