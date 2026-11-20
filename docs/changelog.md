@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.4
+
+### Changed
+
+- In the page of `Atlas.show()`, *ChEMBL Strict* also counts mechanisms that ChEMBL records on a salt or alternative
+  form of the drug, as the Atlas website now does.
+
 ## 0.4.3
 
 ### Added

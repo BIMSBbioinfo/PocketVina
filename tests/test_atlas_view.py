@@ -7,9 +7,11 @@ Only fixture identifiers are written here (UniProt accessions and PVL IDs); ever
 run time. Expected poses come from ``posefile.Reader`` on the fixture's pose files.
 """
 import gzip
+import hashlib
 import html
 import io
 import json
+import logging
 import os
 import re
 import shutil
@@ -33,6 +35,7 @@ from pocketvina.atlas import (
     _chembl_cells,
     _fixed,
     _pb,
+    _with_salt_forms,
 )
 from pocketvina.io import posefile, sas
 from pocketvina.selection import Selection, pose_name
@@ -318,6 +321,7 @@ def test_show_page_data(atlas, atlas_dir, tmp_path, monkeypatch, capsys):
 
 ACTIVITIES = "https://www.ebi.ac.uk/chembl/explore/activities/QUERYSTRING:"
 NO_RECORD = {"text": "–", "tip": "No ChEMBL record of this drug (or its salt forms) on this protein", "mut": True}
+SALT_FORMS = " (mechanisms also from its salt forms)"  # in the "ChEMBL Strict" text where strict.json.gz has "moa"
 
 
 def chembl_file(atlas_dir, rel):
@@ -334,17 +338,32 @@ def row_of(page, cidx):
     return next(r for r in page["proteins"][0]["rows"] if r["lig"] == cidx)
 
 
+def with_strict(atlas_dir, folder, change):
+    """A copy of the fixture whose chembl_any/strict.json.gz is ``change(its data)``, listed in
+    chembl_any/MANIFEST.json."""
+    release = Path(shutil.copytree(atlas_dir, folder))
+    raw = gzip.compress(json.dumps(change(chembl_file(atlas_dir, "strict.json.gz"))).encode(), mtime=0)
+    (release / "chembl_any" / "strict.json.gz").write_bytes(raw)
+    listing = release / "chembl_any" / "MANIFEST.json"
+    listing.write_text(json.dumps(dict(json.loads(listing.read_text()), **{
+        "strict.json.gz": [hashlib.sha256(raw).hexdigest(), len(raw)]})))
+    return release
+
+
 def test_show_chembl_values(atlas, atlas_dir):
     """Each row of Top hits has the Atlas site's two ChEMBL values: "ChEMBL Strict" from the row's flags (1 MoA,
-    2 assay, 4 weak, else "–"), "ChEMBL Complete" from the protein's records (chembl_any/proteins/<U>.json.gz: MoA
-    with a mechanism, else "assay n · p", "–" without a record), each with a tooltip and a link to ChEMBL."""
+    2 assay, 4 weak, else "–"; MoA also where chembl_any/strict.json.gz "moa" lists the protein for the row's
+    catalogue number), "ChEMBL Complete" from the protein's records (chembl_any/proteins/<U>.json.gz: MoA with a
+    mechanism, else "assay n · p", "–" without a record), each with a tooltip and a link to ChEMBL."""
     n = 0
+    moa = chembl_file(atlas_dir, "strict.json.gz")["moa"]
     for protein in (ABL1, EGFR, PTGS2):
         records = chembl_file(atlas_dir, f"proteins/{protein}.json.gz")
         rows = {row["cidx"]: row for row in top_hits(atlas, protein)[0]}
         for item in atlas._page(protein, None)["proteins"][0]["rows"]:
             row, (first, every) = rows[item["lig"]], item["topValues"]
-            flags, rec = row["flags"], records["d"].get(row["pvl"])
+            flags = row["flags"] | (1 if protein in moa.get(row["cat"], []) else 0)
+            rec = records["d"].get(row["pvl"])
             assert first["text"] == ("MoA" if flags & 1 else "assay" if flags & 2 else "weak" if flags & 4 else "–")
             if rec is None:
                 assert every == NO_RECORD
@@ -379,12 +398,13 @@ def test_show_chembl_values(atlas, atlas_dir):
 
 def test_show_chembl_values_without_chembl_any(atlas, atlas_dir, tmp_path):
     """A release or download without chembl_any/ (release/v1.1, a download of PocketVina 0.4.2): "ChEMBL Strict" only,
-    as the site shows it without the records (a value links to the drug's ChEMBL ID); "ChEMBL Complete" is left out,
-    not shown empty. A protein chembl_any/MANIFEST.json does not list: every "ChEMBL Complete" value is "–"."""
+    as the site shows it without the records (a value links to the drug's ChEMBL ID; the release's flags, so its text
+    does not name the salt forms); "ChEMBL Complete" is left out, not shown empty. A protein chembl_any/MANIFEST.json
+    does not list: every "ChEMBL Complete" value is "–"."""
     without = Atlas(shutil.copytree(atlas_dir, tmp_path / "without", ignore=shutil.ignore_patterns("chembl_any")))
     rows = {row["cidx"]: row for row in top_hits(atlas, ABL1)[0]}
     (prot,) = without._page(ABL1, None)["proteins"]
-    assert prot["topColumns"] == [{"label": "ChEMBL Strict", "tip": CHEMBL_COLUMNS[0][1]}]
+    assert prot["topColumns"] == [{"label": "ChEMBL Strict", "tip": CHEMBL_COLUMNS[0][1].replace(SALT_FORMS, "")}]
     full = atlas._page(ABL1, None)
     for item in prot["rows"]:
         (cell,) = item["topValues"]
@@ -402,9 +422,65 @@ def test_show_chembl_values_without_chembl_any(atlas, atlas_dir, tmp_path):
     assert all(item["topValues"][1] == NO_RECORD for item in prot["rows"])
 
 
+def test_show_chembl_strict_counts_salt_forms(atlas, atlas_dir, tmp_path, caplog):
+    """"ChEMBL Strict" is MoA also where ChEMBL records the mechanism on a salt or alternative form of the drug, as on
+    the site since its round 15h: chembl_any/strict.json.gz "moa" ({catalogue number: [UniProt]}) sets the MoA bit of
+    the row's flags for that protein, in Top hits and in the pair's own row. A pair the release marks MoA stays as it
+    is. Without "moa" (a download made before the site added it) the values are the release's flags and the column's
+    text does not name the salt forms, with no warning; a "moa" that is not as the release writes it gives a warning
+    and the release's flags."""
+    strict = chembl_file(atlas_dir, "strict.json.gz")
+    assert SALT_FORMS in CHEMBL_COLUMNS[0][1] and strict["moa"]
+    marked = [row for row in top_hits(atlas, ABL1)[0] if ABL1 in strict["moa"].get(row["cat"], [])]
+    assert marked and all(row["flags"] & 1 for row in marked)  # the fixture's "moa": pairs the release marks MoA
+    older = with_strict(atlas_dir, tmp_path / "without", lambda d: {k: v for k, v in d.items() if k != "moa"})
+    strict_text = CHEMBL_COLUMNS[0][1].replace(SALT_FORMS, "")  # its text without "moa"
+    with caplog.at_level(logging.WARNING, logger="pocketvina.atlas"):
+        for protein in (ABL1, EGFR):
+            page, before = atlas._page(protein, None)["proteins"][0], Atlas(older)._page(protein, None)["proteins"][0]
+            assert [r["topValues"] for r in page["rows"]] == [r["topValues"] for r in before["rows"]]
+            assert page["topColumns"] == [{"label": label, "tip": tip} for label, tip in CHEMBL_COLUMNS]
+            assert before["topColumns"] == [{"label": "ChEMBL Strict", "tip": strict_text}, page["topColumns"][1]]
+        assert not caplog.text
+    # an "assay" pair of the release, and the run of a salt form (salt_forms/), made MoA by "moa"
+    pair = atlas._pair(EGFR, PAIR[1])
+    salt = json.loads(gzip.decompress((atlas_dir / "salt_forms" / f"{EGFR}.json.gz").read_bytes()))
+    salt_cat = salt["rows"][0][salt["columns"].index("cat")]
+    assert not pair.row["flags"] & 1 and salt_cat != pair.row["cat"]
+    made = Atlas(with_strict(atlas_dir, tmp_path / "made", lambda d: dict(d, moa=dict(d["moa"], **{
+        pair.row["cat"]: [ABL1, EGFR], salt_cat: [EGFR]}))))
+    page, before = made._page(EGFR, None)["proteins"][0], atlas._page(EGFR, None)["proteins"][0]
+    rec = chembl_file(atlas_dir, f"proteins/{EGFR}.json.gz")["d"][PAIR[1]]
+    moa_card = CHEMBL_URL.format(rec.get("mc") or rec["xp"][0])  # the record's mechanism, else the parent
+    for item, was in zip(page["rows"], before["rows"]):
+        if item["lig"] == pair.row["cidx"]:
+            first = item["topValues"][0]
+            assert (first["text"], first["href"], first["strong"]) == ("MoA", moa_card, True) and "mut" not in first
+            assert first["tip"].startswith("ChEMBL mechanism of action: a known target of this drug")
+            assert first["tip"].endswith(" (opens ChEMBL)")
+            assert item["topValues"][1] == was["topValues"][1]  # "ChEMBL Complete" as it was
+        else:
+            assert item == was
+    assert page["topColumns"] == before["topColumns"]
+    entry = made._pair(EGFR, salt_cat)
+    assert entry.row["cat"] == salt_cat and entry.row["cidx"] != pair.row["cidx"]
+    for which in (pair, entry):  # the pair's own row, after Top hits
+        last = made._page(EGFR, 1, which)["proteins"][0]["rows"][-1]
+        assert last["lig"] == which.row["cidx"] and last["topValues"][0]["text"] == "MoA"
+    # a "moa" that is not as the release writes it: a warning, and the release's flags
+    for k, moa in enumerate([[pair.row["cat"]], {pair.row["cat"]: EGFR}, {pair.row["cat"]: [1]}, "x", 0]):
+        bad = Atlas(with_strict(atlas_dir, tmp_path / f"bad{k}", lambda d, moa=moa: dict(d, moa=moa)))
+        with caplog.at_level(logging.WARNING, logger="pocketvina.atlas"):
+            page = bad._page(EGFR, None)["proteins"][0]
+        assert 'the "ChEMBL Strict" values of the page have fewer links and leave out mechanisms' in caplog.text, k
+        assert [r["topValues"][0]["text"] for r in page["rows"]] == [r["topValues"][0]["text"] for r in before["rows"]]
+        assert page["topColumns"][0]["tip"] == strict_text
+        caplog.clear()
+
+
 def test_chembl_values_follow_the_sites_rules():
     """The two values of a row as the site's components/cells.tsx draws them (with what ProteinWorkspace.tsx gives
-    them), on made-up records."""
+    them, and lib/client.ts the rows), on made-up records."""
     nothing, card = {"pvl": {}, "xo": {}}, CHEMBL_URL.format
     row = {"pvl": "PVL1", "flags": 16}
     assert _chembl_cells(row, "CHEMBL5", None, nothing) == [  # no chembl_any/: "ChEMBL Strict" only
@@ -420,7 +496,13 @@ def test_chembl_values_follow_the_sites_rules():
         "text": "weak", "tip": "ChEMBL permissive assay evidence only (opens the activity records in ChEMBL)",
         "href": card("CHEMBL5"), "mut": True}]
     for no_id in (None, "", "chembl5", "CHEMBL5\n", "CHEMBL٥", "CHEMBL5 OR x", "javascript:x"):
-        assert "href" not in _chembl_cells(dict(row, flags=1), no_id, None, nothing)[0]  # only ChEMBL IDs are linked
+        # only ChEMBL IDs are linked; without a link the tooltip does not say "(opens ...)" (the site's round 15h)
+        assert _chembl_cells(dict(row, flags=1), no_id, None, nothing) == [{
+            "text": "MoA", "tip": "ChEMBL mechanism of action: a known target of this drug", "strong": True}]
+    assert _chembl_cells(dict(row, flags=2), None, None, nothing) == [
+        {"text": "assay", "tip": "ChEMBL strict binding-assay evidence"}]
+    assert _chembl_cells(dict(row, flags=4), None, None, nothing) == [
+        {"text": "weak", "tip": "ChEMBL permissive assay evidence only", "mut": True}]
     # the protein's records: activity links of the parents (xp: the exact structure's) on its ChEMBL targets
     rec = {"m": 0, "a": 12, "p": 6.25, "par": ["CHEMBL7", "CHEMBL8"], "xp": ["CHEMBL7"],
            "tc": ["CHEMBL102", "CHEMBL100"], "mc": "", "mt": []}
@@ -467,6 +549,17 @@ def test_chembl_values_follow_the_sites_rules():
         every = _chembl_cells(row, None, {"d": {"PVL1": dict(moa, m=m, mt=[], mn="", mk=[], mc="")}}, nothing)[1]
         assert every == {"text": "MoA", "tip": "ChEMBL mechanism of action: . 1 activity record (opens ChEMBL)",
                          "href": card("CHEMBL7"), "strong": True}
+    # the mechanisms on salt forms (strict.json "moa"): the MoA bit of the row's flags for the proteins it lists, as
+    # the site's lib/client.ts getData sets it; the row given is not changed
+    salt = dict(nothing, moa={"CAT1": ["P1", "P2"]})
+    row = {"pvl": "PVL1", "cat": "CAT1", "flags": 2}
+    assert _with_salt_forms(row, "P1", salt) == dict(row, flags=3) and row["flags"] == 2
+    assert _with_salt_forms(dict(row, flags=None), "P2", salt)["flags"] == 1
+    assert _with_salt_forms(dict(row, flags=1), "P2", salt)["flags"] == 1
+    for other, links in (("P3", salt), ("P1", nothing), ("P1", dict(nothing, moa={}))):
+        assert _with_salt_forms(row, other, links) is row
+    assert _with_salt_forms(dict(row, cat="CAT2"), "P1", salt)["flags"] == 2
+    assert _chembl_cells(_with_salt_forms(row, "P1", salt), "CHEMBL5", None, salt)[0]["text"] == "MoA"
     # pChEMBL as JavaScript's toFixed(1) writes it: a tie rounds up
     assert [_fixed(x) for x in (6.25, 6.35, 8.75, 7, 0.05, 10.0)] == ["6.3", "6.3", "8.8", "7.0", "0.1", "10.0"]
 

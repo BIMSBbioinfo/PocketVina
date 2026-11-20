@@ -102,10 +102,11 @@ SAS_MANIFEST = "sas/MANIFEST.json"
 # The two ChEMBL values of each drug in Top hits, as on the Atlas site's protein page (its round 15:
 # components/cells.tsx and ProteinWorkspace.tsx; the names of its round 15c). "ChEMBL Strict": the strict evidence of
 # the pair, from the row's flags (meta.json "flags": 1 mechanism of action, 2 strict binding assay, 4 permissive assay
-# only). "ChEMBL Complete": every ChEMBL record of the drug on the protein, from chembl_any/proteins/<U>.json.gz;
-# chembl_any/strict.json.gz has the links of the strict values. chembl_any/MANIFEST.json lists these files as
-# sas/MANIFEST.json does, {"proteins/<U>.json.gz": [sha256, bytes], ...} (the release's MANIFEST.json does not list
-# chembl_any/; a release or download without it has no "ChEMBL Complete")
+# only), with the mechanisms ChEMBL records on a salt or alternative form of the drug (chembl_any/strict.json.gz "moa",
+# the site's round 15h). "ChEMBL Complete": every ChEMBL record of the drug on the protein, from
+# chembl_any/proteins/<U>.json.gz; chembl_any/strict.json.gz also has the links of the strict values.
+# chembl_any/MANIFEST.json lists these files as sas/MANIFEST.json does, {"proteins/<U>.json.gz": [sha256, bytes], ...}
+# (the release's MANIFEST.json does not list chembl_any/; a release or download without it has no "ChEMBL Complete")
 CHEMBL_DIR = "chembl_any"
 CHEMBL_MANIFEST = "chembl_any/MANIFEST.json"
 CHEMBL_STRICT = "strict.json.gz"  # in chembl_any/
@@ -113,15 +114,17 @@ CHEMBL_ACTIVITIES_URL = "https://www.ebi.ac.uk/chembl/explore/activities/QUERYST
 # the columns of Top hits with their tooltips (the site's column texts, ProteinWorkspace.tsx infoTexts)
 CHEMBL_COLUMNS = (
     ("ChEMBL Strict",
-     "ChEMBL evidence for this protein-drug pair, by the exact structure and strict rules. MoA: a known "
-     "mechanism-of-action target. assay: strict binding-assay evidence. weak: permissive assay evidence only. –: none, "
-     "which is not the same as no binding. Click a value to open it in ChEMBL."),
+     "ChEMBL evidence for this protein-drug pair, by the exact structure (mechanisms also from its salt forms) and "
+     "strict rules. MoA: a known mechanism-of-action target. assay: strict binding-assay evidence. weak: permissive "
+     "assay evidence only. –: none, which is not the same as no binding. Click a value to open it in ChEMBL."),
     ("ChEMBL Complete",
      "Every ChEMBL record of this drug on this protein, also from its salt forms and from records of the same "
      "structure without stereo; not filtered. Other drugs of the same structure (stereoisomers, the racemate) are not "
      "counted. MoA: a mechanism of action; assay n · p: n activity records of any assay, p the best pChEMBL where "
      "measured. Click to open them in ChEMBL."),
 )
+# not in the "ChEMBL Strict" text of a release without "moa" (it shows the release's flags as they are)
+_SALT_FORMS = " (mechanisms also from its salt forms)"
 # ChEMBL target types of a mechanism that is not on the protein alone, as the site names them (cells.tsx KIND)
 _TARGET_KINDS = {
     "PROTEIN COMPLEX": "a protein complex", "PROTEIN COMPLEX GROUP": "a protein complex group",
@@ -1028,12 +1031,13 @@ class Atlas:
 
     def _chembl(self, uniprot: str) -> Tuple[Optional[dict], dict]:
         """What the ChEMBL values of a protein's Top hits need (``_chembl_cells``): (its "ChEMBL Complete" records,
-        chembl_any/proteins/<U>.json.gz: {"tc", "tca", "xr", "d": {PVL: record}}; the links of the strict values,
-        chembl_any/strict.json.gz: {"pvl": {PVL: [parent ChEMBL IDs]}, "xo": {PVL: name}}), each checked against
-        chembl_any/MANIFEST.json (sha256 and size); over HTTP the files are kept in the cache. The records are None when
-        the release has no chembl_any/ (an older release or download: the page has no "ChEMBL Complete"), or when they
-        cannot be read now, e.g. without network, or are damaged (a warning); {"d": {}} (no records, as on the site)
-        when chembl_any/MANIFEST.json does not list the protein. The links are empty when there are none."""
+        chembl_any/proteins/<U>.json.gz: {"tc", "tca", "xr", "d": {PVL: record}}; the links and mechanisms of the
+        strict values, chembl_any/strict.json.gz: {"pvl": {PVL: [parent ChEMBL IDs]}, "xo": {PVL: name}} and, if it has
+        it, "moa": {catalogue number: [UniProt]}; ``_strict_links``), each checked against chembl_any/MANIFEST.json
+        (sha256 and size); over HTTP the files are kept in the cache. The records are None when the release has no
+        chembl_any/ (an older release or download: the page has no "ChEMBL Complete"), or when they cannot be read now,
+        e.g. without network, or are damaged (a warning); {"d": {}} (no records, as on the site) when
+        chembl_any/MANIFEST.json does not list the protein. The links are empty when there are none."""
         unreadable = (OSError, ValueError, EOFError, zlib.error)
         try:
             if not self._chembl_listing():
@@ -1105,19 +1109,39 @@ class Atlas:
         return True
 
     def _strict_links(self) -> dict:
-        """chembl_any/strict.json.gz, {"pvl": {PVL: [parent ChEMBL IDs]}, "xo": {PVL: name}}, read once: the links of
-        the strict ChEMBL values and the other drug a value's structure is. Empty without it, and when it cannot be
-        read now (a warning; read again next time): the strict values then link as on a release without
-        chembl_any/."""
+        """chembl_any/strict.json.gz, {"pvl": {PVL: [parent ChEMBL IDs]}, "xo": {PVL: name}} and, if it has it,
+        "moa": {catalogue number: [UniProt]}, read once: the links of the strict ChEMBL values, the other drug a
+        value's structure is, and the mechanisms ChEMBL records on a salt or alternative form of a drug
+        (``_with_salt_forms``). A file without "moa" (made before the site added it, 19 Nov 2026) leaves the release's
+        flags as they are; over HTTP such a copy in the cache has its listing fetched again once, as the server's file
+        may be newer. Empty without the file, and when it cannot be read now (a warning; read again next time): the
+        strict values are then as on a release without chembl_any/."""
         if self._chembl_strict is None:
             try:
                 links = _check_strict(self._chembl_json(CHEMBL_STRICT))
+                if "moa" not in links:
+                    links = self._newer_strict_links(links)
             except (OSError, ValueError, EOFError, zlib.error) as e:
-                logger.warning('the "ChEMBL Strict" values of the page have fewer links: %s/%s cannot be read: %s',
-                               CHEMBL_DIR, CHEMBL_STRICT, e)
+                logger.warning('the "ChEMBL Strict" values of the page have fewer links and leave out mechanisms on '
+                               'salt forms: %s/%s cannot be read: %s', CHEMBL_DIR, CHEMBL_STRICT, e)
                 return {"pvl": {}, "xo": {}}
             self._chembl_strict = links
         return self._chembl_strict
+
+    def _newer_strict_links(self, links: dict) -> dict:
+        """strict.json.gz read again after its listing is fetched again (over HTTP, once per Atlas:
+        ``_fetch_listing_again``), for a file without "moa" that may be an older copy in the cache. ``links`` as they
+        are for a folder, without network, or when the server's answer cannot be used (no warning: they are what the
+        page had before). Without an answer (e.g. no network now) the listing may be fetched again later, e.g. by
+        download(); this runs once per Atlas either way (``_strict_links`` keeps what it returns)."""
+        try:
+            if self._fetch_listing_again(CHEMBL_MANIFEST):
+                return _check_strict(self._chembl_json(CHEMBL_STRICT))
+        except OSError:
+            self._fetched_again.discard(CHEMBL_MANIFEST)
+        except (ValueError, EOFError, zlib.error):
+            pass
+        return links
 
     def _structure(self, data: dict) -> str:
         """PDB text of the AlphaFold model the drugs were docked into (structures/<AF id>.pdb.gz of the release, or
@@ -1304,7 +1328,8 @@ class Atlas:
                           # as on the site, not for an entry's own run (the drug page ranks the drug's runs)
                           "across": across if row["cidx"] in canonical else None,
                           "sdf": _text(top) if top else None, "pockets": pockets, "pb": _pb(row, checks, statuses),
-                          "topValues": _chembl_cells(row, info.chembl_id, records, strict)})
+                          "topValues": _chembl_cells(_with_salt_forms(row, uniprot, strict), info.chembl_id, records,
+                                                     strict)})
             smiles = info.library_smiles or info.docked_smiles
             ligands[str(int(row["cidx"]))] = {
                 "id": info.name or row["pvl"], "smiles": smiles, "docked": info.docked_smiles,
@@ -1322,7 +1347,7 @@ class Atlas:
                    "info": _protein_info(data, self.meta)}
         if points is not None:
             protein["sas"] = _page_sas(points)
-        protein["topColumns"] = _chembl_columns(records is not None)  # the ChEMBL columns of Top hits
+        protein["topColumns"] = _chembl_columns(records is not None, "moa" in strict)  # the ChEMBL columns of Top hits
         return {"format": 1, "proteins": [protein], "ligands": ligands, "maxLigands": max_ligands,
                 "initial": _initial(None, uniprot, docked)}
 
@@ -1727,17 +1752,32 @@ def _diseases(ot: Optional[dict]) -> Optional[dict]:
 _CHEMBL_LINK = re.compile(r"CHEMBL[0-9]+")  # what goes into a link to ChEMBL (lib/client.ts CHEMBL_ID)
 
 
-def _chembl_columns(every_record: bool) -> List[dict]:
+def _chembl_columns(every_record: bool, salt_forms: bool) -> List[dict]:
     """The ChEMBL columns of Top hits with their tooltips: "ChEMBL Strict", and "ChEMBL Complete" when the release has
-    chembl_any/ (else it is left out: an empty column would read as "no records")."""
-    return [{"label": label, "tip": tip} for label, tip in CHEMBL_COLUMNS[:2 if every_record else 1]]
+    chembl_any/ (else it is left out: an empty column would read as "no records"). ``salt_forms``: whether "ChEMBL
+    Strict" counts the mechanisms on salt forms (chembl_any/strict.json.gz has "moa"); if not, its text does not say
+    so."""
+    columns = [{"label": label, "tip": tip} for label, tip in CHEMBL_COLUMNS[:2 if every_record else 1]]
+    if not salt_forms:
+        columns[0]["tip"] = columns[0]["tip"].replace(_SALT_FORMS, "")
+    return columns
+
+
+def _with_salt_forms(row: dict, uniprot: str, strict: dict) -> dict:
+    """A row of the protein ``uniprot`` as the site's lib/client.ts getData gives it (its round 15h): the mechanism of
+    action bit (1) of its flags is also set where ChEMBL records the mechanism on a salt or alternative form of the
+    drug, i.e. where chembl_any/strict.json.gz "moa" lists the protein for the row's catalogue number. The release's
+    own rows are not changed (their flags stay the original labels)."""
+    if uniprot in ((strict.get("moa") or {}).get(row.get("cat")) or ()):
+        return dict(row, flags=int(row.get("flags") or 0) | 1)
+    return row
 
 
 def _chembl_cells(row: dict, chembl_id: Optional[str], records: Optional[dict], strict: dict) -> List[dict]:
     """The ChEMBL values of a row of Top hits, from the data the site's protein page gives its two ChEMBL cells
-    (ProteinWorkspace.tsx): "ChEMBL Strict", then "ChEMBL Complete" unless ``records`` is None. ``chembl_id``: the
-    ChEMBL ID of the row's catalogue number, the strict value's link where chembl_any/ has none; ``records``,
-    ``strict``: ``Atlas._chembl``."""
+    (ProteinWorkspace.tsx): "ChEMBL Strict", then "ChEMBL Complete" unless ``records`` is None. ``row``: as the site
+    gives it (``_with_salt_forms``); ``chembl_id``: the ChEMBL ID of the row's catalogue number, the strict value's
+    link where chembl_any/ has none; ``records``, ``strict``: ``Atlas._chembl``."""
     pvl = row["pvl"]
     found = records["d"].get(pvl) if records is not None else None  # its "ChEMBL Complete" record (site: anyRec)
     rec, protein = found or {}, records or {}
@@ -1758,8 +1798,9 @@ def _strict_cell(flags: int, parents: List[str], targets: List[str], moa_card: s
                  exact_as: str, no_record: bool) -> dict:
     """The "ChEMBL Strict" value (cells.tsx ChemblCell): MoA (flag 1), assay (2) or weak (4) of the exact structure,
     else "–". MoA opens the ChEMBL page of the compound that carries the mechanism, assay and weak the activity records
-    of the parent compounds on the protein's ChEMBL targets. ``exact_as``: the other drug ChEMBL records the
-    catalogue's exact structure as; ``no_record``: ChEMBL has no record of it on the protein (no link)."""
+    of the parent compounds on the protein's ChEMBL targets; the tooltip says "(opens ...)" only when there is a link
+    (the site's round 15h). ``exact_as``: the other drug ChEMBL records the catalogue's exact structure as;
+    ``no_record``: ChEMBL has no record of it on the protein (no link)."""
     if not flags & 7:
         return _cell("–", "No ChEMBL evidence (not the same as no binding)", mut=True)
     exact = (f". From the catalogue's exact structure, which ChEMBL records as {exact_as.lower()} (the racemate or "
@@ -1774,8 +1815,8 @@ def _strict_cell(flags: int, parents: List[str], targets: List[str], moa_card: s
     if no_record:
         tip = f"{what}{exact}. ChEMBL 37 has no record of this compound on this protein, so there is nothing to open"
         return _cell(text, tip, strong=bool(flags & 1), mut=not flags & 3)
-    tip = f"{what}{exact} (opens {'ChEMBL' if flags & 1 else 'the activity records in ChEMBL'})"
-    return _cell(text, tip, href, strong=bool(flags & 1), mut=not flags & 3)
+    opens = f" (opens {'ChEMBL' if flags & 1 else 'the activity records in ChEMBL'})" if href else ""
+    return _cell(text, f"{what}{exact}{opens}", href, strong=bool(flags & 1), mut=not flags & 3)
 
 
 def _any_cell(rec: Optional[dict]) -> dict:
@@ -1878,15 +1919,20 @@ def _check_chembl_any(data, uniprot: str) -> None:
 
 
 def _check_strict(data) -> dict:
-    """chembl_any/strict.json as {"pvl": {PVL: [parent ChEMBL IDs]}, "xo": {PVL: name}} ({} each when it has none);
+    """chembl_any/strict.json as {"pvl": {PVL: [parent ChEMBL IDs]}, "xo": {PVL: name}} ({} each when it has none),
+    with "moa": {catalogue number: [UniProt]} only when it has that key (a file made before 19 Nov 2026 has not);
     ValueError if it is not that."""
     if data is None:
         return {"pvl": {}, "xo": {}}
-    pvl, xo = (data.get("pvl") or {}, data.get("xo") or {}) if isinstance(data, dict) else (None, None)
+    wrong = ValueError("it is not as the release writes it")
+    if not isinstance(data, dict):
+        raise wrong
+    pvl, xo, moa = data.get("pvl") or {}, data.get("xo") or {}, data.get("moa")
     if not (isinstance(pvl, dict) and all(_strs(v) for v in pvl.values()) and isinstance(xo, dict)
-            and all(isinstance(v, str) for v in xo.values())):
-        raise ValueError("it is not as the release writes it")
-    return {"pvl": pvl, "xo": xo}
+            and all(isinstance(v, str) for v in xo.values())
+            and (moa is None or isinstance(moa, dict) and all(_strs(v) for v in moa.values()))):
+        raise wrong
+    return {"pvl": pvl, "xo": xo} if moa is None else {"pvl": pvl, "xo": xo, "moa": moa}
 
 
 def _forms(data: dict) -> List[dict]:

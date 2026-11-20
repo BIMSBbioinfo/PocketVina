@@ -1462,6 +1462,7 @@ def test_chembl_records(atlas_dir, atlas_server, tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     expected = (_chembl_json(atlas_dir, f"proteins/{ABL1}.json.gz"), _chembl_json(atlas_dir, "strict.json.gz"))
     assert expected[0]["uniprot"] == ABL1 and DRUG in expected[0]["d"] and DRUG in expected[1]["pvl"]
+    assert list(expected[1]) == ["pvl", "xo", "moa"]
     assert Atlas(atlas_dir)._chembl(ABL1) == expected
     remote = Atlas(atlas_server.url)
     asked = len(atlas_server.requests)
@@ -1548,7 +1549,7 @@ def test_chembl_records_missing_or_unreadable(atlas_dir, atlas_server, tmp_path,
                 "strict.json.gz": [hashlib.sha256(bad).hexdigest(), len(bad)]})))
             atlas = Atlas(folder)
             assert atlas._chembl(ABL1) == (record, nothing) and atlas._chembl_strict is None, k
-            assert 'the "ChEMBL Strict" values of the page have fewer links' in caplog.text
+            assert 'the "ChEMBL Strict" values of the page have fewer links and leave out' in caplog.text
             caplog.clear()
         remote = Atlas(atlas_server.url)
         _no_network(monkeypatch)
@@ -1758,6 +1759,88 @@ def test_listings_fetched_again_keep_the_cache_on_a_bad_answer(atlas_dir, tmp_pa
     assert not [p for p in (tmp_path / "cache").rglob("*") if ".tmp-" in p.name or ".fetched-" in p.name]
 
 
+def _put_strict(release: Path, data: dict) -> dict:
+    """chembl_any/strict.json.gz of ``release`` written as ``data``, with its entry in chembl_any/MANIFEST.json."""
+    raw = gzip.compress(json.dumps(data).encode(), mtime=0)
+    (release / "chembl_any" / "strict.json.gz").write_bytes(raw)
+    listing = release / "chembl_any" / "MANIFEST.json"
+    listing.write_text(json.dumps(dict(json.loads(listing.read_text()), **{
+        "strict.json.gz": [hashlib.sha256(raw).hexdigest(), len(raw)]}), indent=0))
+    return data
+
+
+def test_chembl_strict_without_moa(atlas_dir, tmp_path, http_server, monkeypatch, caplog):
+    """chembl_any/strict.json.gz made before the site added "moa" (19 Nov 2026), in a download made then or in the
+    cache: the strict values are the release's flags, with no warning. Over HTTP such a copy in the cache may be older
+    than the server's file: its listing is fetched again once per Atlas, and the page gets "moa". Without network, or
+    when the server has no "moa" either, the copy is read as it is; after no network, download() on the same Atlas
+    still fetches the listing. A folder is read as it is (nothing is fetched)."""
+    new = _chembl_json(atlas_dir, "strict.json.gz")
+    assert new["moa"]
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    old = _put_strict(release, {k: v for k, v in new.items() if k != "moa"})
+    server = http_server(release)
+    with caplog.at_level(logging.WARNING, logger="pocketvina.atlas"):
+        folder = Atlas(release)
+        assert folder._chembl(ABL1)[1] == old and not folder._fetched_again
+        for cache in ("offline", "cache"):  # each cache gets the listing and strict.json.gz without "moa"
+            monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / cache))
+            atlas = Atlas(server.url)
+            asked = len(server.requests)
+            assert atlas._chembl(ABL1)[1] == old and atlas._chembl(EGFR)[1] == old  # the server has none either
+            assert [r for r, _ in server.requests[asked:]].count("chembl_any/MANIFEST.json") == 2  # read, once again
+        # a listing answer that is not JSON (a Wi-Fi login page) never replaces the cache: the copy is read as it is
+        listing = release / "chembl_any" / "MANIFEST.json"
+        good = listing.read_bytes()
+        listing.write_bytes(b"<html><body>Log in to use this network</body></html>")
+        cached = next((tmp_path / "cache").rglob("chembl_any/MANIFEST.json"))
+        kept = cached.read_bytes()
+        assert Atlas(server.url)._chembl(ABL1)[1] == old and cached.read_bytes() == kept
+        listing.write_bytes(good)
+        _put_strict(release, new)  # the site adds "moa"
+        atlas = Atlas(server.url)
+        asked = len(server.requests)
+        assert atlas._chembl(ABL1)[1] == new
+        assert [r for r, _ in server.requests[asked:]] == ["chembl_any/MANIFEST.json", "chembl_any/strict.json.gz"]
+        tip = atlas._page(EGFR, None)["proteins"][0]["topColumns"][0]["tip"]
+        assert "(mechanisms also from its salt forms)" in tip
+        assert Atlas(server.url)._chembl(ABL1)[1] == new  # from the cache now
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "offline"))
+        offline = Atlas(server.url)
+        with monkeypatch.context() as m:
+            _no_network(m)
+            assert offline._chembl(ABL1)[1] == old
+        # the network is back: a download with the same Atlas fetches the listing again and copies the new file
+        out = Path(offline.download(["ABL1"], tmp_path / "out"))
+        assert Atlas(out)._chembl(ABL1)[1] == new
+    assert not caplog.text
+
+
+@pytest.mark.parametrize("source", ["local", "remote"])
+def test_download_into_one_made_before_moa(source, atlas_dir, tmp_path, http_server, monkeypatch, caplog):
+    """A download made before the site added "moa" to chembl_any/strict.json.gz (PocketVina 0.4.3 before 19 Nov 2026)
+    has the release's flags; a new download into the folder replaces its strict.json.gz (its sha256 changed), so its
+    pages count the mechanisms on salt forms. Over HTTP also with the older listing in the cache."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    new = _chembl_json(atlas_dir, "strict.json.gz")
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    old = _put_strict(release, {k: v for k, v in new.items() if k != "moa"})
+    location = release if source == "local" else http_server(release).url
+    out = Path(Atlas(location).download(["ABL1"], tmp_path / "out"))
+    assert Atlas(out)._chembl(ABL1)[1] == old
+    _put_strict(release, new)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="pocketvina.atlas"):
+        Atlas(location).download(["EGFR"], out)
+    assert not caplog.text
+    strict = "chembl_any/strict.json.gz"
+    assert (out / strict).read_bytes() == (release / strict).read_bytes()
+    listed = json.loads((release / "chembl_any" / "MANIFEST.json").read_text())
+    assert json.loads((out / "chembl_any" / "MANIFEST.json").read_text()) == {
+        rel: listed[rel] for rel in (f"proteins/{ABL1}.json.gz", f"proteins/{EGFR}.json.gz", "strict.json.gz")}
+    assert Atlas(out)._chembl(ABL1)[1] == new
+
+
 # --- the public Atlas ------------------------------------------------------------------------------------------
 
 @pytest.mark.network
@@ -1775,6 +1858,7 @@ def test_public_atlas(tmp_path, monkeypatch):
     assert points["protein"] == ABL1 and list(points["pockets"]) == ["1", "2", "3", "4", "5"] and points["rest"]
     records, strict = atlas._chembl(ABL1)  # checked against chembl_any/MANIFEST.json
     assert records["uniprot"] == ABL1 and DRUG in records["d"] and DRUG in strict["pvl"] and DRUG in records["xr"]
+    assert any(ABL1 in proteins for proteins in strict["moa"].values())  # the mechanisms on salt forms (19 Nov 2026)
 
 
 def test_example_script_runs(atlas_dir, tmp_path):
