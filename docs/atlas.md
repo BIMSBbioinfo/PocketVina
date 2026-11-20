@@ -264,15 +264,20 @@ the page to that file. [3D views](visualisation.md) describes the parts of the p
 Each drug in *Top hits* has the website's two ChEMBL values. Click a value to open it in ChEMBL. The website explains
 [how both are made](https://pocketvina-atlas.mdc-berlin.de/docs/#chembl).
 
-- *ChEMBL Strict*: ChEMBL evidence for this protein–drug pair, by the exact structure and strict rules. MoA: a known
-  mechanism-of-action target. assay: strict binding-assay evidence. weak: permissive assay evidence only. –: none,
-  which is not the same as no binding.
+- *ChEMBL Strict*: ChEMBL evidence for this protein–drug pair, by the exact structure (mechanisms also from its salt
+  forms) and strict rules. MoA: a known mechanism-of-action target. assay: strict binding-assay evidence. weak:
+  permissive assay evidence only. –: none, which is not the same as no binding.
 - *ChEMBL Complete*: every ChEMBL record of this drug on this protein, also from its salt forms and from records of the
   same structure without stereo; not filtered. Other drugs of the same structure (stereoisomers, the racemate) are not
   counted. MoA: a mechanism of action; assay n · p: n activity records of any assay, p the best pChEMBL where measured.
 
 *ChEMBL Complete* comes from the release's `chembl_any/` folder, which the public Atlas has. A release folder or a
 download without it, such as one made by PocketVina 0.4.2 or older, shows *ChEMBL Strict* only.
+
+As on the website, *ChEMBL Strict* also counts mechanisms that ChEMBL records on a salt or alternative form of the
+drug (key "moa" of `chembl_any/strict.json.gz`); the release's own files keep the original labels. A download made
+before the website added "moa" (19 November 2026), or one without `chembl_any/`, shows the original labels; running
+`download()` into it again adds it.
 
 ## Identifiers
 
@@ -327,7 +332,7 @@ pocketvina atlas download ABL1 EGFR --out my_atlas
 ```{code-block} text
 :class: pv-output
 
-PocketVina Atlas v1.1: 2,777 files, 295.0 MB, for 2 proteins into /path/to/my_atlas
+PocketVina Atlas v1.1: 2,777 files, 295.1 MB, for 2 proteins into /path/to/my_atlas
 /path/to/my_atlas
 ```
 
@@ -347,7 +352,7 @@ atlas.download(proteins=["ABL1", "EGFR"], out="my_atlas")
 ```{code-block} text
 :class: pv-output
 
-PocketVina Atlas v1.1: 2,777 files, 295.0 MB, for 2 proteins into /path/to/my_atlas
+PocketVina Atlas v1.1: 2,777 files, 295.1 MB, for 2 proteins into /path/to/my_atlas
 '/path/to/my_atlas'
 ```
 

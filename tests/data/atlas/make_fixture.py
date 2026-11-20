@@ -32,7 +32,8 @@ Every file keeps the layout of the release, so the package reads the fixture exa
   sas/MANIFEST.json             {"<U>.json.gz": [sha256, bytes]} of these files; as in the release, MANIFEST.json does
                                 not list sas/
   chembl_any/proteins/<U>.json.gz   the ChEMBL records of "ChEMBL Complete", only of the drugs of the fixture's rows
-  chembl_any/strict.json.gz         (its keys "d" and "xr"; "strict.json" filtered the same way)
+  chembl_any/strict.json.gz         (its keys "d" and "xr"; "strict.json" filtered the same way, its "moa" to the
+                                    fixture's catalogue numbers and proteins)
   chembl_any/MANIFEST.json      {"<path in chembl_any/>": [sha256, bytes]} of these files (not of compounds/, which the
                                 package does not read); MANIFEST.json does not list chembl_any/, as in the release
 """
@@ -225,7 +226,7 @@ def build(release):
     write_json("cidx.json", dict(cidx, cidx={c: v for c, v in sorted(cidx["cidx"].items()) if c in cats}))
     tables(release, cats, pvls)
     sas(release)
-    chembl_any(release, row_pvls)
+    chembl_any(release, row_pvls, cats)
     write_json("meta.json", dict(meta, subset=SUBSET))
     manifest(meta)
 
@@ -307,9 +308,10 @@ def sas(release):
     write("sas/MANIFEST.json", json.dumps(dict(sorted(listed.items())), indent=0).encode("utf-8"))
 
 
-def chembl_any(release, row_pvls):
+def chembl_any(release, row_pvls, cats):
     """chembl_any/proteins/<U>.json.gz of the fixture's proteins and chembl_any/strict.json.gz, only with the drugs of
-    the fixture's rows, and chembl_any/MANIFEST.json, written as the release writes them (JSON with indent 0)."""
+    the fixture's rows (its "moa", {catalogue number: [UniProt]}: only with the fixture's catalogue numbers ``cats``
+    and proteins), and chembl_any/MANIFEST.json, written as the release writes them (JSON with indent 0)."""
     listed = {}
 
     def put(rel, data):
@@ -326,9 +328,12 @@ def chembl_any(release, row_pvls):
         print(f"chembl_any/proteins/{uniprot}.json.gz: {len(data['d'])} drugs with records, {size} bytes")
     every = set().union(*row_pvls.values())
     strict = read_json(os.path.join(release, "chembl_any", "strict.json.gz"))
+    moa = {cat: [u for u in us if u in PROTEINS] for cat, us in strict["moa"].items() if cat in cats}
     strict = {key: {pvl: v for pvl, v in strict[key].items() if pvl in every} for key in ("pvl", "xo")}
+    strict["moa"] = {cat: us for cat, us in moa.items() if us}
     size = put("strict.json.gz", strict)
-    print(f"chembl_any/strict.json.gz: {len(strict['pvl'])} drugs, {len(strict['xo'])} of another drug, {size} bytes")
+    print(f"chembl_any/strict.json.gz: {len(strict['pvl'])} drugs, {len(strict['xo'])} of another drug, "
+          f"{sum(map(len, strict['moa'].values()))} pairs in 'moa', {size} bytes")
     write("chembl_any/MANIFEST.json", json.dumps(dict(sorted(listed.items())), indent=0).encode("utf-8"))
 
 
