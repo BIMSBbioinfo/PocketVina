@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- The web app renders upload names, result values, and viewer errors as inert data while preserving 3D previews.
 - The web app limits downloads and 3D previews to registered uploads and files from its own docking runs.
   Uploaded files use unique, sanitized storage names while retaining their original names for display.
 

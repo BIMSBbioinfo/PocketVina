@@ -2,8 +2,12 @@
 
 import importlib.util
 import io
+import json
+import os
 import sys
+from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
 
@@ -64,8 +68,8 @@ def fake_docking(web_app, tmp_path, monkeypatch):
 
 
 def upload(client, name="protein.pdb", body=b"ATOM synthetic protein\n"):
-    # Backslashes in multipart quoted filenames must be escaped on the wire.
-    wire_name = name.replace("\\", "\\\\")
+    # Werkzeug's test encoder leaves multipart quoted filenames unescaped.
+    wire_name = name.replace("\\", "\\\\").replace('"', '\\"')
     return client.post("/add_protein", data={"protein_file": (io.BytesIO(body), wire_name)})
 
 
@@ -85,6 +89,28 @@ def test_upload(client, web_app):
     assert info["original_name"] == "protein.pdb"
     assert Path(info["file_path"]).read_bytes() == b"ATOM synthetic protein\n"
     assert web_app.uploaded_proteins == [info]
+
+
+def test_two_clients_share_original_names_as_json(client, web_app):
+    special = "synthetic <img src=x onerror='synthetic()'> & \"quoted\".pdb"
+    first = upload(client, special)
+    assert first.status_code == 200
+    assert first.get_json()["proteins"] == [special]
+    other_client = web_app.app.test_client()
+    second = upload(other_client, "normal.pdb")
+    assert second.status_code == 200
+    payload = second.get_json()
+    assert second.mimetype == "application/json"
+    assert payload["success"] is True
+    assert payload["proteins"] == [special, "normal.pdb"]
+    assert [info["original_name"] for info in payload["protein_info"]] == payload["proteins"]
+    assert payload["protein_info"] == web_app.uploaded_proteins
+    for info in payload["protein_info"]:
+        assert "<" not in info["filename"] and '"' not in info["filename"]
+    # CI's subsequent Node gate consumes this real response without logging its values.
+    payload_path = os.environ.get("POCKETVINA_DOM_PAYLOAD")
+    if payload_path:
+        Path(payload_path).write_text(json.dumps(payload), encoding="utf-8")
 
 
 @pytest.mark.parametrize("name", ["../../protein.pdb", "/nested/protein.pdb", r"..\protein.pdb",
@@ -380,3 +406,100 @@ def test_docking_registers_only_discovered_artifacts(client, web_app, fake_docki
         denied = client.get("/view_result_file", query_string={"path": str(path)})
         assert denied.status_code == 404
         assert PROTECTED not in denied.data
+
+
+class TableParser(HTMLParser):
+    """Inspect parsed boundaries, including attributes and text after entity decoding."""
+
+    def __init__(self, markup):
+        super().__init__(convert_charrefs=True)
+        self.elements = []
+        self.headers = []
+        self.cells = []
+        self.current_text = None
+        self.feed(markup)
+        self.close()
+
+    def handle_starttag(self, tag, attrs):
+        self.elements.append((tag, dict(attrs)))
+        if tag in ("th", "td"):
+            self.current_text = []
+
+    def handle_endtag(self, tag):
+        if tag in ("th", "td"):
+            target = self.headers if tag == "th" else self.cells
+            target.append("".join(self.current_text).strip())
+            self.current_text = None
+
+    def handle_data(self, data):
+        if self.current_text is not None:
+            self.current_text.append(data)
+
+
+@pytest.mark.parametrize("processed", [False, True])
+@pytest.mark.parametrize("ligand_column", ["ligand", "ligand_file", "output_file", "pdbqt_file", "result_file"])
+def test_table_data_and_preview_routes_are_inert(web_app, processed, ligand_column):
+    special = "synthetic <img src=x onerror='synthetic()'> & \"quoted\" + # ? %"
+    protein = special + ".pdb"
+    ligand = "/synthetic run/" + special + ".pdbqt"
+    processed_path = "/synthetic run/" + special + "_processed.pdb"
+    if processed:
+        web_app.visualization_files[protein] = {"processed_pdb": processed_path}
+    columns = ["protein", ligand_column, special, "affinity"]
+    df = web_app.pd.DataFrame([[protein, ligand, special, -7.125]], columns=columns)
+    parsed = TableParser(web_app.create_sortable_table(df))
+    assert parsed.headers == columns + ["3D"]
+    assert parsed.cells[:4] == [protein, ligand, special, "-7.1250"]
+    assert {tag for tag, _ in parsed.elements} == {
+        "table", "thead", "tbody", "tr", "th", "td", "div", "span", "i", "button",
+    }
+    events = [(tag, key, value) for tag, attrs in parsed.elements for key, value in attrs.items()
+              if key.startswith("on")]
+    assert events == [("th", "onclick", f"sortTable({i})") for i in range(len(columns))]
+    buttons = [attrs for tag, attrs in parsed.elements if tag == "button"]
+    assert len(buttons) == (1 if ligand_column == "result_file" else 2)
+    for attrs in buttons:
+        assert set(attrs) == {"class", "title", "data-protein-url", "data-ligand-url"}
+        assert attrs["title"] in {
+            "3D Viewer", "View protein + ligand in Mol* (processed protein)",
+            "View protein + ligand in Mol* (original protein)",
+        }
+        protein_url = urlsplit(attrs["data-protein-url"])
+        ligand_url = urlsplit(attrs["data-ligand-url"])
+        for url in (protein_url, ligand_url):
+            assert not url.scheme and not url.netloc and not url.fragment
+        assert ligand_url.path == "/view_result_file"
+        assert parse_qs(ligand_url.query) == {"path": [ligand]}
+        if processed:
+            assert protein_url.path == "/view_processed_file"
+            assert parse_qs(protein_url.query) == {"path": [processed_path]}
+        else:
+            assert unquote(protein_url.path) == "/view_protein/" + protein
+            assert not protein_url.query
+
+
+def test_normal_and_empty_tables_keep_formatting(web_app):
+    df = web_app.pd.DataFrame({"protein": ["/run/protein.pdb"], "molecule_name": ["normal"],
+                              "affinity": [-7.123456], "count": [2], "large": [12345.0],
+                              "missing": [None]})
+    parsed = TableParser(web_app.create_sortable_table(df))
+    assert parsed.headers == list(df.columns) + ["3D"]
+    assert parsed.cells == ["protein.pdb", "normal", "-7.1235", "2", "1.23e+04", "N/A", "N/A"]
+    assert web_app.create_sortable_table(web_app.pd.DataFrame()) == (
+        '<p class="text-muted">No results to display</p>'
+    )
+
+
+def test_table_derived_ligand_uses_encoded_local_preview(web_app, tmp_path):
+    batch = tmp_path / "batch_1_out"
+    batch.mkdir()
+    ligand = batch / "protein-ligand ' & #_out.pdbqt"
+    ligand.write_text("synthetic pose")
+    df = web_app.pd.DataFrame({"protein": ["protein.pdb"], "molecule_name": ["ligand"]})
+    parsed = TableParser(web_app.create_sortable_table(df, output_dir=str(tmp_path)))
+    buttons = [attrs for tag, attrs in parsed.elements if tag == "button"]
+    assert len(buttons) == 1
+    assert buttons[0]["data-protein-url"] == "/view_protein/protein.pdb"
+    url = urlsplit(buttons[0]["data-ligand-url"])
+    assert url.path == "/view_result_file"
+    assert parse_qs(url.query) == {"path": [str(ligand)]}

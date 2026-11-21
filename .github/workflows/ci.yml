@@ -54,4 +54,14 @@ jobs:
       - name: Versions
         run: python -c "import sys, rdkit, pandas, pyarrow; print(sys.version, rdkit.__version__, pandas.__version__, pyarrow.__version__)"
       - name: Pytest (no GPU; the engine is tests/fake_engine.py)
+        env:
+          POCKETVINA_DOM_PAYLOAD: ${{ runner.temp }}/app-dom-payload.json
         run: python -m pytest tests -m "not gpu"
+      - name: App DOM contracts (Node.js 18 or later)
+        if: matrix.python-version == '3.12'
+        env:
+          POCKETVINA_DOM_PAYLOAD: ${{ runner.temp }}/app-dom-payload.json
+        run: |
+          command -v node >/dev/null || { echo "Node.js 18 or later is required for app DOM contracts" >&2; exit 1; }
+          node --version
+          node --test tests/app_dom.test.cjs

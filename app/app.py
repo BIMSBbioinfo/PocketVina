@@ -8,6 +8,8 @@ from pocketvina import PocketVinaGPU, PocketVinaConfig, P2RankConfig, PocketConf
 from typing import Optional
 import json
 import uuid
+from html import escape
+from urllib.parse import quote, urlencode
 from werkzeug.utils import secure_filename
 
 # Set up logging
@@ -114,7 +116,7 @@ def create_sortable_table(df, output_dir: Optional[str] = None):
         html.append(f'''
             <th class="sortable-header" onclick="sortTable({i})">
                 <div class="d-flex align-items-center justify-content-between">
-                    <span>{col}</span>
+                    <span>{escape(str(col), quote=True)}</span>
                     <div class="sort-buttons">
                         <i class="fas fa-sort sort-icon" id="sort-icon-{i}"></i>
                     </div>
@@ -185,8 +187,15 @@ def create_sortable_table(df, output_dir: Optional[str] = None):
                 if base_name in prot_filename or prot_filename.replace('.pdb', '').replace('-pocket1', '').replace('-pocket2', '').replace('-pocket3', '') in base_name:
                     processed_protein_file = files.get('processed_pdb')
                     break
-        for col_idx, (col_name, value) in enumerate(row.items()):
-            # Format numeric values
+        # Build local URLs from raw values, then escape only at the HTML boundary.
+        protein_route = None
+        if processed_protein_file:
+            protein_route = '/view_processed_file?' + urlencode({'path': processed_protein_file})
+        elif prot_filename:
+            protein_route = '/view_protein/' + quote(prot_filename, safe='')
+        ligand_route = '/view_result_file?' + urlencode({'path': ligand_value}) if ligand_value else None
+
+        for col_name, value in row.items():
             if pd.api.types.is_numeric_dtype(type(value)) and not pd.isna(value):
                 if isinstance(value, float):
                     formatted_value = f"{value:.4f}" if abs(value) < 1000 else f"{value:.2e}"
@@ -194,97 +203,32 @@ def create_sortable_table(df, output_dir: Optional[str] = None):
                     formatted_value = str(value)
             else:
                 formatted_value = str(value) if not pd.isna(value) else "N/A"
-            
-            # Add 3D view button for certain columns
-            if col_name.lower() in ['protein', 'protein_file', 'protein_path'] and formatted_value != "N/A":
-                # For Mol* integration, we only display the protein name here.
-                # The actual 3D preview (protein + ligand together) will be provided from the ligand column.
-                filename = formatted_value.split('/')[-1] if '/' in formatted_value else formatted_value
-                html.append(f'''<td>{filename}</td>''')
-            elif col_name.lower() in ['ligand', 'ligand_file', 'output_file', 'pdbqt_file'] and formatted_value != "N/A":
-                # Get corresponding protein file for complex view
-                protein_col_name = None
-                protein_value = None
-                for pcol, pval in row.items():
-                    if pcol.lower() in ['protein', 'protein_file', 'protein_path']:
-                        protein_col_name = pcol
-                        protein_value = str(pval) if not pd.isna(pval) else "N/A"
-                        break
-                
-                # Find actual processed protein filename
-                processed_protein_file = None
-                chimerax_script = None
-                pymol_script = None
-                if protein_value and protein_value != "N/A":
-                    prot_filename = protein_value.split('/')[-1] if '/' in protein_value else protein_value
-                    
-                    # Look for processed protein file
-                    for base_name, files in visualization_files.items():
-                        if base_name in prot_filename or prot_filename.replace('.pdb', '').replace('-pocket1', '').replace('-pocket2', '').replace('-pocket3', '') in base_name:
-                            processed_protein_file = files.get('processed_pdb')
-                            chimerax_script = files.get('chimerax_script')
-                            pymol_script = files.get('pymol_script')
-                            break
-                
-                if processed_protein_file:
-                    # Single Mol* preview button: open in-app Mol* preview with both URLs
-                    html.append(f'''
-                        <td>
-                            <div class="d-flex align-items-center justify-content-between">
-                                <span>{formatted_value}</span>
-                                <button class="btn btn-outline-primary view-3d-btn btn-sm" 
-                                        title="View protein + ligand in Mol* (processed protein)"
-                                        onclick="(function(){{
-                                            const origin = window.location.origin;
-                                            const p = encodeURIComponent(origin + '/view_processed_file?path=' + encodeURIComponent('{processed_protein_file}'));
-                                            const l = encodeURIComponent(origin + '/view_result_file?path=' + encodeURIComponent('{formatted_value}'));
-                                            openMolstarOverlay(origin + '/molstar_preview?protein-url=' + p + '&ligand-url=' + l);
-                                        }})()">
-                                    <i class="fas fa-cube"></i>
-                                </button>
-                            </div>
-                        </td>
-                    ''')
-                else:
-                    # Fallback: use original uploaded protein with ligand in in-app Mol* preview
-                    html.append(f'''
-                        <td>
-                            <div class="d-flex align-items-center justify-content-between">
-                                <span>{formatted_value}</span>
-                                <button class="btn btn-outline-primary view-3d-btn btn-sm" 
-                                        title="View protein + ligand in Mol* (original protein)"
-                                        onclick="(function(){{
-                                            const origin = window.location.origin;
-                                            const p = encodeURIComponent(origin + '/view_protein/{prot_filename}');
-                                            const l = encodeURIComponent(origin + '/view_result_file?path=' + encodeURIComponent('{formatted_value}'));
-                                            openMolstarOverlay(origin + '/molstar_preview?protein-url=' + p + '&ligand-url=' + l);
-                                        }})()">
-                                    <i class="fas fa-cube"></i>
-                                </button>
-                            </div>
-                        </td>
-                    ''')
-            else:
-                html.append(f'<td>{formatted_value}</td>')
-        # Inline 3D column
-        protein_route = None
-        ligand_route = None
-        if ligand_value:
-            ligand_route = f"/view_result_file?path={ligand_value}"
-        if processed_protein_file:
-            protein_route = f"/view_processed_file?path={processed_protein_file}"
-        elif prot_filename:
-            protein_route = f"/view_protein/{prot_filename}"
 
+            if col_name.lower() in ['protein', 'protein_file', 'protein_path'] and formatted_value != "N/A":
+                filename = formatted_value.split('/')[-1]
+                html.append(f'<td>{escape(filename, quote=True)}</td>')
+            elif col_name.lower() in ['ligand', 'ligand_file', 'output_file', 'pdbqt_file'] and formatted_value != "N/A":
+                preview_protein_route = protein_route or '/view_protein/None'
+                preview_ligand_route = '/view_result_file?' + urlencode({'path': formatted_value})
+                source = 'processed' if processed_protein_file else 'original'
+                html.append(f'''<td>
+                    <div class="d-flex align-items-center justify-content-between">
+                        <span>{escape(formatted_value, quote=True)}</span>
+                        <button class="btn btn-outline-primary view-3d-btn btn-sm"
+                                title="View protein + ligand in Mol* ({source} protein)"
+                                data-protein-url="{escape(preview_protein_route, quote=True)}"
+                                data-ligand-url="{escape(preview_ligand_route, quote=True)}">
+                            <i class="fas fa-cube"></i>
+                        </button>
+                    </div>
+                </td>''')
+            else:
+                html.append(f'<td>{escape(formatted_value, quote=True)}</td>')
         if protein_route and ligand_route:
             html.append(f'''<td>
                 <button class="btn btn-outline-primary btn-sm" title="3D Viewer"
-                    onclick="(function(){{
-                        const origin = window.location.origin;
-                        const p = encodeURIComponent(origin + '{protein_route}');
-                        const l = encodeURIComponent(origin + '{ligand_route}');
-                        openMolstarOverlay(origin + '/molstar_preview?protein-url=' + p + '&ligand-url=' + l);
-                    }})()">
+                        data-protein-url="{escape(protein_route, quote=True)}"
+                        data-ligand-url="{escape(ligand_route, quote=True)}">
                     <i class="fas fa-cube"></i> 3D Viewer
                 </button>
             </td>''')

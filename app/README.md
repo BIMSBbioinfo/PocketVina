@@ -57,4 +57,17 @@ through these routes. Clearing proteins removes their upload registrations. Clie
 share the app's uploads, runs, and registry; this app does not provide accounts or
 per-user isolation.
 
+### Rendering and regression checks
+
+Upload names and viewer error details are rendered as text. Result tables escape
+headers, cell values, and attributes on the server; preview controls carry encoded
+local URLs in data attributes, with click listeners opening the Mol* overlay. Keep
+this boundary when adding new display values or file previews.
+
+Run the Flask regressions with `python -m pytest tests/test_app.py -q` and the DOM
+contracts with `node --test tests/app_dom.test.cjs` (Node.js 18 or later; no npm
+install). The Node tests execute the real inline application script against a minimal
+DOM double. They check text and event contracts, not full browser or Mol* behavior.
+CI also passes the two-client Flask upload response into these DOM checks.
+
 
