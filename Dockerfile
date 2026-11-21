@@ -56,6 +56,7 @@ COPY pyproject.toml setup.py MANIFEST.in README.md LICENSE /src/
 COPY pocketvina/*.py pocketvina/PocketVina-GPU /src/pocketvina/
 COPY pocketvina/io/ /src/pocketvina/io/
 COPY pocketvina/OpenCL/ /src/pocketvina/OpenCL/
+COPY pocketvina/viewer/ /src/pocketvina/viewer/
 RUN python3 -m pip wheel --no-cache-dir --no-deps --wheel-dir /wheels /src
 
 FROM base
@@ -66,6 +67,8 @@ RUN python3 -m pip install --no-cache-dir --ignore-installed blinker && \
     python3 -m pip install --no-cache-dir fastapi uvicorn python-multipart boto3 loguru && \
     rm -rf /wheels && \
     pocketvina --version
+
+RUN python3 -c 'from pocketvina import workspace as w; assert w.unpack(w._assets("inline"))["molstarJs"]; assert w.unpack(w._assets("url"))["molstarUrl"]; assert w._read("workspace.js") and w._read("workspace.css")'
 
 # P2Rank where every user of the container finds it (P2Rank writes nothing into its folder)
 RUN pocketvina setup p2rank --dir /opt/pocketvina

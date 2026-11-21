@@ -8,6 +8,7 @@ files that are not part of the package; all of them must stay out of both archiv
 """
 import ast
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -80,6 +81,37 @@ def _copy_checkout(dst: Path, engine: bytes = None) -> Path:
     return dst
 
 
+def _copy_docker_wheel_inputs(dst: Path) -> Path:
+    """Replay only the wheel stage's plain COPY instructions; reject syntax this helper cannot model."""
+    lines = (REPO_ROOT / "Dockerfile").read_text().splitlines()
+    start = lines.index("FROM base AS wheel") + 1
+    dst.mkdir(parents=True)
+    for line in lines[start:]:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line == "RUN python3 -m pip wheel --no-cache-dir --no-deps --wheel-dir /wheels /src":
+            return dst
+        tokens = shlex.split(line)
+        assert (len(tokens) >= 3 and tokens[0] == "COPY" and "\\" not in line
+                and all(not t.startswith(("--", "[")) for t in tokens[1:])), f"Unsupported wheel input: {line}"
+        sources, target = tokens[1:-1], Path(tokens[-1])
+        assert (target.is_absolute() and target.is_relative_to("/src") and ".." not in target.parts
+                and tokens[-1].endswith("/")), f"Unexpected COPY destination: {line}"
+        destination = dst / target.relative_to("/src")
+        destination.mkdir(parents=True, exist_ok=True)
+        for source in sources:
+            assert not Path(source).is_absolute() and ".." not in Path(source).parts, f"Unsupported source: {line}"
+            matches = sorted(REPO_ROOT.glob(source))
+            assert matches, f"COPY source matched no files: {source}"
+            for path in matches:
+                if path.is_dir():
+                    shutil.copytree(path, destination, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(path, destination / path.name)
+    pytest.fail("Docker wheel stage has no expected wheel-build RUN")
+
+
 def _tripwire_env(tmp_path: Path) -> dict:
     """The environment with tripwire scripts first on PATH; each call is appended to ``tripwire_calls.log``."""
     bin_dir = tmp_path / "tripwires"
@@ -133,6 +165,20 @@ def test_setup_py_has_no_install_side_effects():
                                                          "os.path.isfile"}
     commands = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} & {"install", "develop", "egg_info"}
     assert not commands
+
+
+def test_docker_wheel_includes_viewer_assets(tmp_path):
+    """The wheel built from Docker's partial source tree retains every viewer asset and license byte."""
+    if not (REPO_ROOT / "Dockerfile").is_file():
+        pytest.skip("Dockerfile is only present in the repository, not the sdist")
+    _needs_setuptools_77()
+    src = _copy_docker_wheel_inputs(tmp_path / "src")
+    whl = _build(tmp_path, src, "build_wheel")
+    with zipfile.ZipFile(whl) as z:
+        missing = VIEWER_FILES - set(z.namelist())
+    assert not missing, f"Docker wheel is missing viewer assets: {sorted(missing)}"
+    for name in sorted(VIEWER_FILES):
+        assert z_bytes(whl, name) == (REPO_ROOT / name).read_bytes(), name
 
 
 def test_wheel_contents(tmp_path):
