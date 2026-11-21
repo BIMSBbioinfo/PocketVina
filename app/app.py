@@ -7,6 +7,8 @@ from pathlib import Path
 from pocketvina import PocketVinaGPU, PocketVinaConfig, P2RankConfig, PocketConfig
 from typing import Optional
 import json
+import uuid
+from werkzeug.utils import secure_filename
 
 # Set up logging
 logging.basicConfig(
@@ -24,19 +26,61 @@ uploaded_proteins = []  # List of dicts: {'original_name': 'protein.pdb', 'file_
 # Global variable to store processed visualization files after docking
 visualization_files = {}  # Dict: {'protein_name': {'processed_pdb': 'path', 'chimerax_script': 'path', 'pymol_script': 'path'}}
 
-def save_uploaded_file(file):
+artifact_registry = {}  # Canonical path -> (app-created canonical root, artifact kind)
+upload_root = None
+
+def _checked_artifact_path(file_path, root):
+    """Require a regular file beneath root, with no symlinks below that root."""
+    try:
+        raw_path = os.fspath(file_path)
+        if not os.path.isabs(raw_path) or os.path.normpath(raw_path) != raw_path:
+            return None
+        path = Path(raw_path)
+        root = Path(root)
+        if root.resolve(strict=True) != root or not root.is_dir():
+            return None
+        relative = path.relative_to(root)
+        current = root
+        for part in relative.parts:
+            current = current / part
+            if current.is_symlink():
+                return None
+        if not path.is_file():
+            return None
+        return str(path.resolve(strict=True))
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+def register_artifact(file_path, root, kind):
+    """Called only by upload/run producers, never with a request or CSV root."""
+    canonical = _checked_artifact_path(file_path, root)
+    if canonical is not None:
+        artifact_registry[canonical] = (str(Path(root)), kind)
+    return canonical
+
+def resolve_artifact(file_path, allowed_kinds):
+    """Authorize a registered path and recheck its filesystem boundary at use."""
+    if not file_path:
+        return None
+    record = artifact_registry.get(file_path)
+    if record is None:
+        return None
+    root, kind = record
+    if kind not in allowed_kinds:
+        return None
+    return _checked_artifact_path(file_path, root)
+
+def save_uploaded_file(file, kind='ligand_input'):
     """Save uploaded file and return its path"""
-    # Create a persistent upload directory
-    upload_dir = os.path.join(os.getcwd(), 'uploads')
-    os.makedirs(upload_dir, exist_ok=True)
-    
-    # Create unique filename to avoid conflicts
-    import time
-    timestamp = str(int(time.time()))
-    filename = f"{timestamp}_{file.filename}"
-    save_path = os.path.join(upload_dir, filename)
+    global upload_root
+    if upload_root is None:
+        upload_root = str(Path(tempfile.mkdtemp(prefix='pocketvina-uploads-')).resolve())
+    filename = f"{uuid.uuid4().hex}_{secure_filename(file.filename) or 'upload'}"
+    save_path = os.path.join(upload_root, filename)
     
     file.save(save_path)
+    if register_artifact(save_path, upload_root, kind) is None:
+        raise ValueError('Uploaded file is outside its storage directory')
     logger.info(f"Saved file to {save_path}")
     return os.path.abspath(save_path)
 
@@ -257,6 +301,16 @@ def scan_visualization_files(output_dir):
     """Scan for processed visualization files after docking"""
     global visualization_files
     visualization_files = {}
+
+    # Discover files from the app-created run root, never from CSV path values.
+    kinds = {'.pdbqt': 'result_pdbqt', '.pdb': 'processed_pdb',
+             '.cxc': 'chimerax_script', '.pml': 'pymol_script'}
+    for root, dirs, files in os.walk(output_dir, followlinks=False):
+        dirs[:] = [name for name in dirs if not os.path.islink(os.path.join(root, name))]
+        for name in files:
+            kind = kinds.get(Path(name).suffix.lower())
+            if kind:
+                register_artifact(os.path.join(root, name), output_dir, kind)
     
     vis_dir = os.path.join(output_dir, "visualizations")
     if not os.path.exists(vis_dir):
@@ -268,6 +322,8 @@ def scan_visualization_files(output_dir):
     # Scan all files in visualization directory
     for filename in os.listdir(vis_dir):
         filepath = os.path.join(vis_dir, filename)
+        if resolve_artifact(filepath, {'processed_pdb', 'chimerax_script', 'pymol_script'}) is None:
+            continue
         
         # Extract protein base name
         if filename.endswith('_processed.pdb'):
@@ -320,7 +376,7 @@ def add_protein():
     
     # Save the file
     try:
-        file_path = save_uploaded_file(file)
+        file_path = save_uploaded_file(file, kind='uploaded_pdb')
         
         # Store protein info as dictionary
         protein_info = {
@@ -347,10 +403,12 @@ def clear_proteins():
     
     # Clean up uploaded files
     for protein_info in uploaded_proteins:
+        registered_path = resolve_artifact(protein_info['file_path'], {'uploaded_pdb'})
+        artifact_registry.pop(protein_info['file_path'], None)
         try:
-            if os.path.exists(protein_info['file_path']):
-                os.remove(protein_info['file_path'])
-                logger.info(f"Deleted file: {protein_info['file_path']}")
+            if registered_path:
+                os.remove(registered_path)
+                logger.info(f"Deleted file: {registered_path}")
         except Exception as e:
             logger.warning(f"Could not delete file {protein_info['file_path']}: {e}")
     
@@ -389,7 +447,7 @@ def run_docking():
         model_type = request.form.get('model_type', 'alphafold')
         
         # Create temporary directory for results
-        output_dir = tempfile.mkdtemp()
+        output_dir = str(Path(tempfile.mkdtemp()).resolve())
         logger.info(f"Created output directory at {output_dir}")
         
         # Create protein_files.txt
@@ -546,6 +604,9 @@ def run_docking():
                 logger.warning(f"Could not compute best-pose CSV: {e}")
                 df.to_csv(best_csv_path, index=False)
 
+            register_artifact(results_path, output_dir, 'results_csv')
+            register_artifact(best_csv_path, output_dir, 'results_csv')
+
             # Convert DataFrame to sortable HTML table (display best only)
             results_html = create_sortable_table(df_best, output_dir=output_dir)
             
@@ -572,7 +633,10 @@ def run_docking():
 def download_results():
     results_path = request.args.get('path')
     download_name = request.args.get('name', 'results.csv')
-    if results_path and os.path.exists(results_path):
+    if not results_path:
+        return jsonify({'error': 'No file path provided'}), 400
+    results_path = resolve_artifact(results_path, {'results_csv'})
+    if results_path:
         return send_file(results_path, as_attachment=True, download_name=download_name)
     return jsonify({'error': 'Results file not found'}), 404
 
@@ -615,8 +679,8 @@ def view_protein(filename):
             logger.error(f"Available proteins: {[p['filename'] for p in uploaded_proteins]}")
             return jsonify({'error': f'Protein file {filename} not found'}), 404
             
-        if not os.path.exists(file_path):
-            logger.error(f"Protein file path {file_path} does not exist on filesystem")
+        file_path = resolve_artifact(file_path, {'uploaded_pdb'})
+        if not file_path:
             return jsonify({'error': f'Protein file {filename} not found on disk'}), 404
             
         logger.info(f"Serving protein file: {file_path}")
@@ -636,14 +700,9 @@ def view_result_file():
         if not file_path:
             return jsonify({'error': 'No file path provided'}), 400
             
-        if not os.path.exists(file_path):
-            logger.error(f"❌ Result file not found: {file_path}")
-            # List files in parent directory for debugging
-            parent_dir = os.path.dirname(file_path)
-            if os.path.exists(parent_dir):
-                available_files = os.listdir(parent_dir)
-                logger.info(f"📁 Available files in {parent_dir}: {available_files}")
-            return jsonify({'error': f'Result file not found: {file_path}'}), 404
+        file_path = resolve_artifact(file_path, {'result_pdbqt'})
+        if not file_path:
+            return jsonify({'error': 'Result file not found'}), 404
         
         # Check file size and content for PDBQT files
         file_size = os.path.getsize(file_path)
@@ -683,9 +742,9 @@ def view_processed_file():
         if not file_path:
             return jsonify({'error': 'No file path provided'}), 400
             
-        if not os.path.exists(file_path):
-            logger.error(f"Processed file not found: {file_path}")
-            return jsonify({'error': f'Processed file not found: {file_path}'}), 404
+        file_path = resolve_artifact(file_path, {'processed_pdb', 'chimerax_script', 'pymol_script'})
+        if not file_path:
+            return jsonify({'error': 'Processed file not found'}), 404
         
         # Determine mimetype based on extension
         if file_path.endswith('.pdb'):
@@ -711,7 +770,10 @@ def view_script():
         script_path = request.args.get('path')
         script_type = request.args.get('type', 'chimerax')
         
-        if not script_path or not os.path.exists(script_path):
+        if not script_path:
+            return jsonify({'error': 'No file path provided'}), 400
+        script_path = resolve_artifact(script_path, {'chimerax_script', 'pymol_script'})
+        if not script_path:
             return jsonify({'error': 'Script file not found'}), 404
         
         with open(script_path, 'r') as f:
@@ -731,4 +793,4 @@ def view_script():
 if __name__ == '__main__':
     # Get port from environment for Hugging Face compatibility
     port = int(os.environ.get('PORT', 7860))
-    app.run(host='0.0.0.0', port=port, debug=False) 
+    app.run(host='0.0.0.0', port=port, debug=False)

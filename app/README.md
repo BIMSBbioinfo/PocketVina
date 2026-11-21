@@ -44,4 +44,17 @@ python3 app/app.py
 
 Open: http://127.0.0.1:7860/
 
+### File access and shared state
+
+Downloads and 3D previews serve only files registered by this running app process:
+uploaded proteins, result CSV exports, and supported docking and visualization files
+discovered inside app-created run directories. Uploads use unique, sanitized filenames;
+their original names remain available for display. New file-producing code must register
+its artifacts explicitly before a serving route can return them.
+
+The registry is kept in memory. Restarting the process loses access to previous files
+through these routes. Clearing proteins removes their upload registrations. Clients
+share the app's uploads, runs, and registry; this app does not provide accounts or
+per-user isolation.
+
 

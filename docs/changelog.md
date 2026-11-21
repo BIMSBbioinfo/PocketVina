@@ -1,5 +1,12 @@
 # Changelog
 
+## Not released yet
+
+### Fixed
+
+- The web app limits downloads and 3D previews to registered uploads and files from its own docking runs.
+  Uploaded files use unique, sanitized storage names while retaining their original names for display.
+
 ## 0.4.4
 
 ### Changed
