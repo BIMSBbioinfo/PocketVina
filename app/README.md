@@ -44,4 +44,30 @@ python3 app/app.py
 
 Open: http://127.0.0.1:7860/
 
+### File access and shared state
+
+Downloads and 3D previews serve only files registered by this running app process:
+uploaded proteins, result CSV exports, and supported docking and visualization files
+discovered inside app-created run directories. Uploads use unique, sanitized filenames;
+their original names remain available for display. New file-producing code must register
+its artifacts explicitly before a serving route can return them.
+
+The registry is kept in memory. Restarting the process loses access to previous files
+through these routes. Clearing proteins removes their upload registrations. Clients
+share the app's uploads, runs, and registry; this app does not provide accounts or
+per-user isolation.
+
+### Rendering and regression checks
+
+Upload names and viewer error details are rendered as text. Result tables escape
+headers, cell values, and attributes on the server; preview controls carry encoded
+local URLs in data attributes, with click listeners opening the Mol* overlay. Keep
+this boundary when adding new display values or file previews.
+
+Run the Flask regressions with `python -m pytest tests/test_app.py -q` and the DOM
+contracts with `node --test tests/app_dom.test.cjs` (Node.js 18 or later; no npm
+install). The Node tests execute the real inline application script against a minimal
+DOM double. They check text and event contracts, not full browser or Mol* behavior.
+CI also passes the two-client Flask upload response into these DOM checks.
+
 

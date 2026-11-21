@@ -487,31 +487,60 @@
             });
         }
 
-                 function updateProteinList() {
-             const listElement = document.getElementById('protein-list');
-             if (uploadedProteins.length === 0) {
-                 listElement.innerHTML = '<em class="text-muted">No proteins uploaded yet...</em>';
-             } else {
-                                   listElement.innerHTML = uploadedProteins.map((protein, index) => {
-                      // Get the actual filename for 3D viewer
-                      const actualFilename = proteinInfo[index] ? proteinInfo[index].filename : protein;
-                      console.log(`Protein ${index}: display="${protein}", actual="${actualFilename}"`);
-                     
-                     return `<div class="protein-item d-flex align-items-center justify-content-between mb-2 p-2 bg-light rounded">
-                         <div class="d-flex align-items-center">
-                             <i class="fas fa-dna text-success me-2"></i>
-                             <span class="fw-bold">${protein}</span>
-                         </div>
-                         <div class="d-flex align-items-center">
-                             <button class="btn btn-outline-primary view-3d-btn" onclick="view3D('${actualFilename}', 'protein')" title="View in 3D">
-                                 <i class="fas fa-cube"></i> 3D
-                             </button>
-                             <small class="text-muted ms-2">#${index + 1}</small>
-                         </div>
-                     </div>`;
-                 }).join('');
-             }
-         }
+        function updateProteinList() {
+            const listElement = document.getElementById('protein-list');
+            listElement.replaceChildren();
+            if (uploadedProteins.length === 0) {
+                const empty = document.createElement('em');
+                empty.className = 'text-muted';
+                empty.textContent = 'No proteins uploaded yet...';
+                listElement.appendChild(empty);
+                return;
+            }
+            uploadedProteins.forEach((protein, index) => {
+                const actualFilename = proteinInfo[index] ? proteinInfo[index].filename : protein;
+                const item = document.createElement('div');
+                item.className = 'protein-item d-flex align-items-center justify-content-between mb-2 p-2 bg-light rounded';
+                const label = document.createElement('div');
+                label.className = 'd-flex align-items-center';
+                const dna = document.createElement('i');
+                dna.className = 'fas fa-dna text-success me-2';
+                const name = document.createElement('span');
+                name.className = 'fw-bold';
+                name.textContent = protein;
+                label.appendChild(dna);
+                label.appendChild(name);
+                const controls = document.createElement('div');
+                controls.className = 'd-flex align-items-center';
+                const button = document.createElement('button');
+                button.className = 'btn btn-outline-primary view-3d-btn';
+                button.title = 'View in 3D';
+                button.textContent = ' 3D';
+                const cube = document.createElement('i');
+                cube.className = 'fas fa-cube';
+                button.prepend(cube);
+                button.addEventListener('click', () => view3D(actualFilename, 'protein'));
+                const ordinal = document.createElement('small');
+                ordinal.className = 'text-muted ms-2';
+                ordinal.textContent = `#${index + 1}`;
+                controls.appendChild(button);
+                controls.appendChild(ordinal);
+                item.appendChild(label);
+                item.appendChild(controls);
+                listElement.appendChild(item);
+            });
+        }
+
+        // Result HTML is replaced after each run; delegate clicks to its stable container.
+        document.getElementById('results-table').addEventListener('click', function(event) {
+            const button = event.target.closest('button[data-protein-url][data-ligand-url]');
+            if (!button || !this.contains(button)) return;
+            const origin = window.location.origin;
+            const preview = new URL('/molstar_preview', origin);
+            preview.searchParams.set('protein-url', new URL(button.dataset.proteinUrl, origin).href);
+            preview.searchParams.set('ligand-url', new URL(button.dataset.ligandUrl, origin).href);
+            openMolstarOverlay(preview.href);
+        });
 
         function runDocking() {
             const ligandsFile = document.getElementById('ligands-file').files[0];
@@ -1278,16 +1307,26 @@
         
         function showViewerError(title, message) {
             const element3d = document.getElementById('viewer3d');
-            element3d.innerHTML = `
-                <div class="d-flex align-items-center justify-content-center h-100">
-                    <div class="text-center">
-                        <i class="fas fa-exclamation-triangle fa-3x text-warning mb-3"></i>
-                        <h5>${title}</h5>
-                        <p class="text-muted">${currentFileName}</p>
-                        <small class="text-muted">${message}</small>
-                    </div>
-                </div>
-            `;
+            const wrapper = document.createElement('div');
+            wrapper.className = 'd-flex align-items-center justify-content-center h-100';
+            const content = document.createElement('div');
+            content.className = 'text-center';
+            const icon = document.createElement('i');
+            icon.className = 'fas fa-exclamation-triangle fa-3x text-warning mb-3';
+            const heading = document.createElement('h5');
+            heading.textContent = title;
+            const filename = document.createElement('p');
+            filename.className = 'text-muted';
+            filename.textContent = currentFileName;
+            const detail = document.createElement('small');
+            detail.className = 'text-muted';
+            detail.textContent = message;
+            content.appendChild(icon);
+            content.appendChild(heading);
+            content.appendChild(filename);
+            content.appendChild(detail);
+            wrapper.appendChild(content);
+            element3d.replaceChildren(wrapper);
         }
 
         function resetView() {
