@@ -1404,7 +1404,8 @@ def _no_network(monkeypatch):
 
 def test_sas_points(atlas_dir, atlas_server, tmp_path, monkeypatch):
     """P2Rank's SAS points of a protein for its page (Atlas._sas): sas/<U>.json.gz, from a folder and over HTTP. Over
-    HTTP the file and sas/MANIFEST.json are kept in the cache: later they are read from there, also without network."""
+    HTTP the file and sas/MANIFEST.json are kept in the cache: later they are read from there (the listing checked with
+    the server once per Atlas, HTTP 304), also without network."""
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     expected = sas.decode((atlas_dir / "sas" / f"{ABL1}.json.gz").read_bytes())
     assert expected["protein"] == ABL1 and list(expected["pockets"]) == ["1", "2", "3", "4", "5"]
@@ -1416,7 +1417,9 @@ def test_sas_points(atlas_dir, atlas_server, tmp_path, monkeypatch):
     asked = len(atlas_server.requests)
     again = Atlas(atlas_server.url)
     assert again._sas(ABL1) == expected
-    assert [r for r, _ in atlas_server.requests[asked:]] == ["meta.json"]  # never from the cache: it names the release
+    # meta.json is never read from the cache (it names the release); the listing is checked: not changed
+    assert [r for r, _ in atlas_server.requests[asked:]] == ["meta.json", "sas/MANIFEST.json"]
+    assert atlas_server.conditional == [("sas/MANIFEST.json", 304)]
     again._sas_files = None  # sas/MANIFEST.json is read again: from the cache
     _no_network(monkeypatch)
     assert again._sas(ABL1) == expected
@@ -1457,8 +1460,8 @@ def test_sas_points_missing_or_unreadable(atlas_dir, atlas_server, tmp_path, mon
 def test_chembl_records(atlas_dir, atlas_server, tmp_path, monkeypatch):
     """What the ChEMBL values of a page need (Atlas._chembl): the protein's records of "ChEMBL Complete"
     (chembl_any/proteins/<U>.json.gz) and the strict values' links (chembl_any/strict.json.gz), from a folder and over
-    HTTP. Over HTTP the files and chembl_any/MANIFEST.json are kept in the cache: later they are read from there, also
-    without network."""
+    HTTP. Over HTTP the files and chembl_any/MANIFEST.json are kept in the cache: later they are read from there (the
+    listing checked with the server once per Atlas, HTTP 304), also without network."""
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     expected = (_chembl_json(atlas_dir, f"proteins/{ABL1}.json.gz"), _chembl_json(atlas_dir, "strict.json.gz"))
     assert expected[0]["uniprot"] == ABL1 and DRUG in expected[0]["d"] and DRUG in expected[1]["pvl"]
@@ -1475,7 +1478,9 @@ def test_chembl_records(atlas_dir, atlas_server, tmp_path, monkeypatch):
     asked = len(atlas_server.requests)
     again = Atlas(atlas_server.url)
     assert again._chembl(ABL1) == expected
-    assert [r for r, _ in atlas_server.requests[asked:]] == ["meta.json"]  # never from the cache: it names the release
+    # meta.json is never read from the cache (it names the release); the listing is checked: not changed
+    assert [r for r, _ in atlas_server.requests[asked:]] == ["meta.json", "chembl_any/MANIFEST.json"]
+    assert atlas_server.conditional == [("chembl_any/MANIFEST.json", 304)]
     again._chembl_files = again._chembl_strict = None  # read again: from the cache
     _no_network(monkeypatch)
     assert again._chembl(ABL1) == expected
@@ -1577,29 +1582,35 @@ def _make_chembl_again(release: Path) -> dict:
 
 
 def test_chembl_records_made_again(atlas_dir, tmp_path, http_server, monkeypatch, caplog):
-    """The site may make chembl_any/ again after the cache got its listing (kept: the release is final). Over HTTP a
-    file that does not match the listing in the cache has the listing fetched again, once per Atlas, and is read
-    again: the page has the new records, with no warning. Until then a file in the cache that matches the old listing
-    is read as it is."""
+    """The site may make chembl_any/ again after the cache got its listing and files (kept: the release is final). A
+    new Atlas checks the listing with the server before it reads it: its page has the new records, with no warning,
+    without download() or clearing the cache, and the listing is asked for once. An Atlas that read the old listing
+    before (a session still open) reads what it read until a file does not match its listing: then the listing is
+    fetched again, once per Atlas, and the file is read again."""
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
     server = http_server(release)
-    old = Atlas(server.url)._chembl(ABL1)  # the cache gets the listing, strict.json.gz and ABL1's records
+    stale = Atlas(server.url)
+    old = stale._chembl(ABL1)  # the cache gets the listing, strict.json.gz and ABL1's records
     new = _make_chembl_again(release)
     with caplog.at_level(logging.WARNING, logger="pocketvina.atlas"):
-        stale = Atlas(server.url)
-        assert stale._chembl(ABL1) == old  # all in the cache, as the cached listing says
+        asked = len(server.requests)
+        assert stale._chembl(ABL1) == old and len(server.requests) == asked  # read before: from memory and the cache
         atlas = Atlas(server.url)
         asked = len(server.requests)
-        page = atlas._page(EGFR, None)["proteins"][0]  # EGFR's file does not match the cached listing
+        page = atlas._page(EGFR, None)["proteins"][0]
         local = Atlas(release)._page(EGFR, None)["proteins"][0]
         assert page["topColumns"] == local["topColumns"] and len(page["topColumns"]) == 2
         assert [r["topValues"] for r in page["rows"]] == [r["topValues"] for r in local["rows"]]
         assert atlas._chembl(EGFR) == (new[f"proteins/{EGFR}.json.gz"], new["strict.json.gz"])
         assert atlas._chembl(ABL1) == (new[f"proteins/{ABL1}.json.gz"], new["strict.json.gz"])
         assert [r for r, _ in server.requests[asked:]].count("chembl_any/MANIFEST.json") == 1
-        # the other session: its listing is older than ABL1's file in the cache now, so it fetches the listing too
+        assert server.conditional == [("chembl_any/MANIFEST.json", 200)]  # checked: the server has another one
+        # the session still open: ABL1's file in the cache is the new one now, which its listing does not list, so it
+        # fetches the listing again (a plain request) and reads it again
+        asked = len(server.requests)
         assert stale._chembl(ABL1) == (new[f"proteins/{ABL1}.json.gz"], new["strict.json.gz"])
+        assert server.conditional[1:] == [] and "chembl_any/MANIFEST.json" in [r for r, _ in server.requests[asked:]]
     assert not caplog.text
 
 
@@ -1620,29 +1631,34 @@ def _make_sas_again(release: Path) -> dict:
 
 
 def test_sas_points_made_again(atlas_dir, tmp_path, http_server, monkeypatch, caplog):
-    """As test_chembl_records_made_again, for sas/ and sas/MANIFEST.json: the page has the new SAS points, with no
-    warning, and the listing is fetched once."""
+    """As test_chembl_records_made_again, for sas/ and sas/MANIFEST.json: the page of a new Atlas has the new SAS
+    points, with no warning, and the listing is asked for once."""
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
     server = http_server(release)
-    old = Atlas(server.url)._sas(ABL1)  # the cache gets sas/MANIFEST.json and ABL1's points
+    stale = Atlas(server.url)
+    old = stale._sas(ABL1)  # the cache gets sas/MANIFEST.json and ABL1's points
     new = _make_sas_again(release)
     with caplog.at_level(logging.WARNING, logger="pocketvina.atlas"):
-        stale = Atlas(server.url)
-        assert stale._sas(ABL1) == old  # in the cache, as the cached listing says
+        asked = len(server.requests)
+        assert stale._sas(ABL1) == old and len(server.requests) == asked  # read before: from memory and the cache
         atlas = Atlas(server.url)
         asked = len(server.requests)
-        page = atlas._page(EGFR, None)["proteins"][0]  # EGFR's file does not match the cached listing
+        page = atlas._page(EGFR, None)["proteins"][0]
         assert page["sas"] == Atlas(release)._page(EGFR, None)["proteins"][0]["sas"]
         assert atlas._sas(EGFR) == new[EGFR] and atlas._sas(ABL1) == new[ABL1]
         assert [r for r, _ in server.requests[asked:]].count("sas/MANIFEST.json") == 1
-        assert stale._sas(ABL1) == new[ABL1]
+        assert server.conditional == [("sas/MANIFEST.json", 200)]
+        asked = len(server.requests)
+        assert stale._sas(ABL1) == new[ABL1]  # its listing is fetched again (a plain request) and read again
+        assert server.conditional[1:] == [] and "sas/MANIFEST.json" in [r for r, _ in server.requests[asked:]]
     assert not caplog.text
 
 
 def test_download_after_listings_made_again(atlas_dir, tmp_path, http_server, monkeypatch, caplog):
     """download() fetches sas/MANIFEST.json and chembl_any/MANIFEST.json from the server first (not the ones in the
-    cache, which may be older): after the site made sas/ and chembl_any/ again its copy is as the new listings say."""
+    cache, which may be older), each once: after the site made sas/ and chembl_any/ again its copy is as the new
+    listings say."""
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
     server = http_server(release)
@@ -1651,7 +1667,10 @@ def test_download_after_listings_made_again(atlas_dir, tmp_path, http_server, mo
     _make_sas_again(release)
     _make_chembl_again(release)
     with caplog.at_level(logging.WARNING, logger="pocketvina.atlas"):
-        out = Path(Atlas(server.url).download(["ABL1", "EGFR"], tmp_path / "out"))
+        downloading = Atlas(server.url)
+        asked = len(server.requests)
+        out = Path(downloading.download(["ABL1", "EGFR"], tmp_path / "out"))
+    assert _listings_asked(server, asked) == sorted(LISTINGS)  # fetched again, then not checked again
     for folder, names in (("sas", [f"{ABL1}.json.gz", f"{EGFR}.json.gz"]),
                           ("chembl_any", [f"proteins/{ABL1}.json.gz", f"proteins/{EGFR}.json.gz", "strict.json.gz"])):
         listed = json.loads((release / folder / "MANIFEST.json").read_text())
@@ -1665,8 +1684,9 @@ def test_download_after_listings_made_again(atlas_dir, tmp_path, http_server, mo
 def test_chembl_records_damaged_after_the_listing_is_fetched_again(atlas_dir, tmp_path, http_server, monkeypatch,
                                                                     caplog):
     """A file that does not match the listing fetched again either is damaged: a warning, as before, and the listing
-    is fetched at most once per Atlas (never a loop). A folder is read as before (nothing is fetched). Without network
-    a cache with the old listing is read as before."""
+    is fetched again at most once per Atlas (never a loop; a plain request, also after the check got the server's
+    listing). A folder is read as before (nothing is fetched). Without network a cache with the old listing is
+    read as before."""
     release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
     server = http_server(release)
     for cache in ("offline", "cache"):  # each cache gets the listing, strict.json.gz and ABL1's records
@@ -1682,7 +1702,8 @@ def test_chembl_records_damaged_after_the_listing_is_fetched_again(atlas_dir, tm
         assert atlas._chembl(EGFR) == (None, new["strict.json.gz"]) and "damaged" in caplog.text
         assert atlas._chembl(PTGS2) == (None, new["strict.json.gz"])
         assert atlas._chembl(EGFR) == (None, new["strict.json.gz"])
-        assert [r for r, _ in server.requests[asked:]].count("chembl_any/MANIFEST.json") == 1
+        assert [r for r, _ in server.requests[asked:]].count("chembl_any/MANIFEST.json") == 2
+        assert server.conditional == [("chembl_any/MANIFEST.json", 200)]  # the check; then a plain request
         assert atlas._chembl(ABL1) == (new[f"proteins/{ABL1}.json.gz"], new["strict.json.gz"])
         caplog.clear()
         folder = Atlas(release)
@@ -1715,7 +1736,8 @@ def test_sas_points_damaged_after_the_listing_is_fetched_again(atlas_dir, tmp_pa
         asked = len(server.requests)
         assert atlas._sas(EGFR) is None and "damaged" in caplog.text
         assert atlas._sas(PTGS2) is None and atlas._sas(EGFR) is None
-        assert [r for r, _ in server.requests[asked:]].count("sas/MANIFEST.json") == 1
+        assert [r for r, _ in server.requests[asked:]].count("sas/MANIFEST.json") == 2
+        assert server.conditional == [("sas/MANIFEST.json", 200)]  # the check; then a plain request
         assert atlas._sas(ABL1) == new[ABL1]
         caplog.clear()
         folder = Atlas(release)
@@ -1759,6 +1781,220 @@ def test_listings_fetched_again_keep_the_cache_on_a_bad_answer(atlas_dir, tmp_pa
     assert not [p for p in (tmp_path / "cache").rglob("*") if ".tmp-" in p.name or ".fetched-" in p.name]
 
 
+LISTINGS = ("sas/MANIFEST.json", "chembl_any/MANIFEST.json")
+
+
+def _old_cache(url: str, release: Path) -> None:
+    """The cache for ``url`` as a PocketVina older than 0.4.6 left it: the listings of sas/ and chembl_any/ and ABL1's
+    files there, as ``release`` has them now, without the headers the server sent with the listings."""
+    source = Source(url)
+    for rel in LISTINGS + (f"sas/{ABL1}.json.gz", f"chembl_any/proteins/{ABL1}.json.gz", "chembl_any/strict.json.gz"):
+        cached = Path(source._cache_path(rel)[0])
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(release / rel, cached)
+
+
+def _listings_asked(server, since: int) -> list:
+    return sorted(rel for rel, _ in server.requests[since:] if rel in LISTINGS)
+
+
+@pytest.mark.parametrize("etags", [True, False])
+def test_listings_checked_once_per_atlas(etags, atlas_dir, tmp_path, http_server, monkeypatch, caplog):
+    """Over HTTP the listings of sas/ and chembl_any/ in the cache are checked with the server once per Atlas, before
+    they are first read (not again for its next pages): a conditional request with the ETag and Last-Modified the
+    server sent with the copy (kept next to it in <listing>.headers.json with the copy's sha256; a server without
+    ETags: Last-Modified only). HTTP 304 (not changed) has no body: the copy is read as it is, not written again. A
+    cache of PocketVina 0.4.5 or older (listings without their headers) gets one plain request, which keeps them. A
+    folder asks nothing."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    server = http_server(release)
+    server.etags = etags
+    _old_cache(server.url, release)
+    local = Atlas(release)
+    expected = local._sas(ABL1), local._chembl(ABL1)
+    assert not local._checked and not local._fetched_again  # a folder
+    written = {}
+    with caplog.at_level(logging.INFO, logger="pocketvina"):
+        for k in range(3):
+            atlas = Atlas(server.url)
+            asked = len(server.requests)
+            for n in range(2):  # two pages: the listings are asked for once
+                atlas.show(ABL1, path=tmp_path / f"page{k}{n}.html")
+            assert (atlas._sas(ABL1), atlas._chembl(ABL1)) == expected
+            assert _listings_asked(server, asked) == sorted(LISTINGS) and atlas._checked == set(LISTINGS)
+            # the first Atlas: plain requests (no headers kept yet); then conditional ones, the listings not changed
+            assert sorted(server.conditional) == sorted((rel, 304) for rel in LISTINGS for _ in range(k))
+            for rel in LISTINGS:
+                cached = next((tmp_path / "cache").rglob(rel))
+                headers = json.loads(cached.with_name(cached.name + ".headers.json").read_text())
+                assert headers["sha256"] == hashlib.sha256(cached.read_bytes()).hexdigest()
+                assert ("ETag" in headers) == etags and "Last-Modified" in headers
+                assert cached.read_bytes() == (release / rel).read_bytes()
+                assert written.setdefault(rel, cached.stat().st_mtime_ns) == cached.stat().st_mtime_ns
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING] and "cannot be read" not in caplog.text
+    assert not [p for p in (tmp_path / "cache").rglob("*") if ".tmp-" in p.name]
+
+
+@pytest.mark.parametrize("route", ["direct", "proxy"])
+def test_listings_made_again_on_the_server(route, atlas_dir, tmp_path, http_server, monkeypatch, caplog):
+    """An old cache (the listings and files of sas/ and chembl_any/ as an older PocketVina left them) after the site
+    made both folders again: a new Atlas has the new SAS points and ChEMBL values, with no warning, without download()
+    or clearing the cache. After the next change its conditional requests get the new listings (HTTP 200), then
+    HTTP 304, which is not an error: no info line, and a listing fetched again (as download() does) gets it too. The
+    same through a proxy (urllib, which raises HTTP 304 as an error)."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    server = http_server(release)
+    url = server.url
+    if route == "proxy":
+        for name in ("no_proxy", "NO_PROXY", "HTTP_PROXY"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("http_proxy", server.url)  # the test server answers a proxy request for any host
+        url = "http://pocketvina-atlas.invalid/"
+    _old_cache(url, release)
+    with caplog.at_level(logging.INFO, logger="pocketvina"):
+        for k, answers in enumerate([[], [200, 200], [304, 304]]):
+            if k < 2:  # the site makes sas/ and chembl_any/ again
+                points, chembl = _make_sas_again(release), _make_chembl_again(release)
+            atlas = Atlas(url)
+            assert atlas.source._proxied == (route == "proxy")
+            asked, checked = len(server.requests), len(server.conditional)
+            assert atlas._sas(ABL1) == points[ABL1] and atlas._sas(EGFR) == points[EGFR]
+            assert atlas._chembl(ABL1) == (chembl[f"proteins/{ABL1}.json.gz"], chembl["strict.json.gz"])
+            assert _listings_asked(server, asked) == sorted(LISTINGS)
+            assert sorted(status for _, status in server.conditional[checked:]) == answers
+        assert atlas._fetch_listing_again(LISTINGS[0])  # as download() does: HTTP 304, then read again
+        assert server.conditional[-1] == (LISTINGS[0], 304) and atlas._sas(EGFR) == points[EGFR]
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert "cannot be" not in caplog.text and "HTTP 304" not in caplog.text
+
+
+def test_listings_checked_without_an_answer(atlas_dir, tmp_path, http_server, monkeypatch, caplog):
+    """When the listings in the cache cannot be checked with the server (no network, a server error, an answer that is
+    not a listing: a Wi-Fi login page, or JSON that lists no file as [sha256, bytes]), the copies are read as they are:
+    no exception and no warning (an info line in the log), and that Atlas does not ask again when it reads them again;
+    a later Atlas asks again. An answer that is not a listing never replaces a copy."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr(atlas_source, "RETRY_DELAYS", (0, 0, 0))
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    server = http_server(release)
+    first = Atlas(server.url)
+    old = first._sas(ABL1), first._chembl(ABL1)  # the cache gets the listings (with their headers) and ABL1's files
+    cached = {rel: next((tmp_path / "cache").rglob(rel)) for rel in LISTINGS}
+    kept = {rel: (path.read_bytes(), path.with_name(path.name + ".headers.json").read_bytes())
+            for rel, path in cached.items()}
+    points, chembl = _make_sas_again(release), _make_chembl_again(release)
+    good = {rel: (release / rel).read_bytes() for rel in LISTINGS}
+    calls = []
+
+    def no_network(m):
+        def fail(url, *args, **kwargs):
+            calls.append(url)
+            raise OSError("Network is unreachable")
+
+        m.setattr(atlas_source, "_fetch", fail)
+        m.setattr(atlas_source, "_urlopen", fail)
+
+    def server_error(m):
+        server.fail = 2 * (len(atlas_source.RETRY_DELAYS) + 1)  # every try of both listings: HTTP 503
+
+    def login_page(m):
+        for rel in LISTINGS:
+            (release / rel).write_bytes(b"<html><body>Log in to use this network</body></html>")
+
+    def json_error(m):  # e.g. a proxy or portal that answers in JSON
+        for rel in LISTINGS:
+            (release / rel).write_text(json.dumps({"error": "busy", "retry": [1, 2]}))
+
+    for cause, why in ((no_network, "Network is unreachable"), (server_error, "HTTP 503"),
+                       (login_page, "is not a listing of files"), (json_error, "is not a listing of files")):
+        atlas = Atlas(server.url)
+        with monkeypatch.context() as m, caplog.at_level(logging.INFO, logger="pocketvina"):
+            cause(m)
+            assert (atlas._sas(ABL1), atlas._chembl(ABL1)) == old
+            assert atlas._checked == set(LISTINGS) and not atlas._fetched_again
+            asked = len(server.requests), len(calls)
+            atlas._sas_files = atlas._chembl_files = atlas._chembl_strict = None  # read again: not asked again
+            assert (atlas._sas(ABL1), atlas._chembl(ABL1)) == old
+            assert (len(server.requests), len(calls)) == asked
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING], cause.__name__
+        assert caplog.text.count("cannot be checked with the server now") == 2 and why in caplog.text, cause.__name__
+        caplog.clear()
+        assert server.fail == 0  # the server error: every try was answered with it
+        for rel, path in cached.items():
+            assert (path.read_bytes(), path.with_name(path.name + ".headers.json").read_bytes()) == kept[rel]
+            (release / rel).write_bytes(good[rel])
+    assert len(calls) == 2 * (len(atlas_source.RETRY_DELAYS) + 1)  # no network: each listing tried, by one Atlas
+    later = Atlas(server.url)  # the server answers again: the new listings
+    assert later._sas(ABL1) == points[ABL1]
+    assert later._chembl(ABL1) == (chembl[f"proteins/{ABL1}.json.gz"], chembl["strict.json.gz"])
+    assert sorted(server.conditional[-2:]) == sorted((rel, 200) for rel in LISTINGS)
+
+
+def test_listing_headers_of_another_copy_are_not_sent(atlas_dir, tmp_path, http_server, monkeypatch):
+    """The headers kept next to a listing are sent only with the copy they came with (its sha256): when another copy
+    was written there since (e.g. an older listing, by PocketVina 0.4.5 sharing the cache), the check is a plain
+    request, so the server's listing replaces it and the page has the server's SAS points."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    server = http_server(release)
+    old = (release / LISTINGS[0]).read_bytes()
+    points = _make_sas_again(release)
+    Atlas(server.url)._sas_listing()  # the cache gets the new listing and its headers
+    cached = next((tmp_path / "cache").rglob(LISTINGS[0]))
+    cached.write_bytes(old)  # another copy, without headers of its own
+    checked = len(server.conditional)
+    atlas = Atlas(server.url)
+    assert atlas._sas(EGFR) == points[EGFR] and atlas._sas(ABL1) == points[ABL1]
+    assert server.conditional[checked:] == []  # a plain request: the headers were not sent
+    assert cached.read_bytes() == (release / LISTINGS[0]).read_bytes()
+    headers = json.loads(cached.with_name(cached.name + ".headers.json").read_text())
+    assert headers["sha256"] == hashlib.sha256(cached.read_bytes()).hexdigest()
+
+
+def test_listing_fetched_again_after_a_wrong_304(atlas_dir, tmp_path, http_server, monkeypatch, caplog):
+    """A server without ETags answers If-Modified-Since by the file's time, so a new listing with an older time (e.g.
+    copied with its times kept) gets HTTP 304 and the check keeps the older listing. A file that does not match it has
+    the listing fetched again with a plain request, which a wrong 304 cannot stop: the page has the new SAS points,
+    with no warning, in the same Atlas."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    server = http_server(release)
+    server.etags = False
+    listing = release / LISTINGS[0]
+    before = listing.stat().st_mtime
+    Atlas(server.url)._sas(ABL1)  # the cache gets the listing, with its Last-Modified
+    points = _make_sas_again(release)
+    os.utime(listing, (before - 100, before - 100))  # the new listing is older than the copy in the cache
+    with caplog.at_level(logging.WARNING, logger="pocketvina"):
+        atlas = Atlas(server.url)
+        assert atlas._sas(EGFR) == points[EGFR]  # not in the cache: does not match the listing the check kept
+        assert atlas._sas(ABL1) == points[ABL1]
+    assert server.conditional == [(LISTINGS[0], 304)] and not caplog.text
+    assert next((tmp_path / "cache").rglob(LISTINGS[0])).read_bytes() == listing.read_bytes()
+
+
+def test_listing_fetched_again_after_no_network(atlas_dir, tmp_path, http_server, monkeypatch, caplog):
+    """A listing that could not be fetched again (no network, e.g. during download()) may be fetched again later by the
+    same Atlas: a download() once the network is back copies the files as the server's listing lists them now."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
+    server = http_server(release)
+    atlas = Atlas(server.url)
+    atlas._sas(ABL1)  # this Atlas has read the listing
+    points = _make_sas_again(release)
+    with monkeypatch.context() as m:
+        _no_network(m)
+        with pytest.raises(OSError, match="cannot reach the PocketVina Atlas"):
+            atlas._fetch_listing_again(LISTINGS[0])
+    assert LISTINGS[0] not in atlas._fetched_again
+    caplog.clear()  # the tries without network (info lines)
+    with caplog.at_level(logging.WARNING, logger="pocketvina"):
+        out = Path(atlas.download(["ABL1"], tmp_path / "out"))
+    assert Atlas(out)._sas(ABL1) == points[ABL1] and not caplog.text
+
+
 def _put_strict(release: Path, data: dict) -> dict:
     """chembl_any/strict.json.gz of ``release`` written as ``data``, with its entry in chembl_any/MANIFEST.json."""
     raw = gzip.compress(json.dumps(data).encode(), mtime=0)
@@ -1772,9 +2008,9 @@ def _put_strict(release: Path, data: dict) -> dict:
 def test_chembl_strict_without_moa(atlas_dir, tmp_path, http_server, monkeypatch, caplog):
     """chembl_any/strict.json.gz made before the site added "moa" (19 Nov 2026), in a download made then or in the
     cache: the strict values are the release's flags, with no warning. Over HTTP such a copy in the cache may be older
-    than the server's file: its listing is fetched again once per Atlas, and the page gets "moa". Without network, or
-    when the server has no "moa" either, the copy is read as it is; after no network, download() on the same Atlas
-    still fetches the listing. A folder is read as it is (nothing is fetched)."""
+    than the server's file: the listing is checked with the server before it is read, once per Atlas, and the page
+    gets "moa". Without network, or when the server has no "moa" either, the copy is read as it is; after no network,
+    download() on the same Atlas still fetches the listing. A folder is read as it is (nothing is fetched)."""
     new = _chembl_json(atlas_dir, "strict.json.gz")
     assert new["moa"]
     release = Path(shutil.copytree(atlas_dir, tmp_path / "v1.1"))
@@ -1788,7 +2024,7 @@ def test_chembl_strict_without_moa(atlas_dir, tmp_path, http_server, monkeypatch
             atlas = Atlas(server.url)
             asked = len(server.requests)
             assert atlas._chembl(ABL1)[1] == old and atlas._chembl(EGFR)[1] == old  # the server has none either
-            assert [r for r, _ in server.requests[asked:]].count("chembl_any/MANIFEST.json") == 2  # read, once again
+            assert [r for r, _ in server.requests[asked:]].count("chembl_any/MANIFEST.json") == 1  # read once
         # a listing answer that is not JSON (a Wi-Fi login page) never replaces the cache: the copy is read as it is
         listing = release / "chembl_any" / "MANIFEST.json"
         good = listing.read_bytes()

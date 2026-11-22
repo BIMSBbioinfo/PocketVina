@@ -41,7 +41,7 @@ import pandas as pd
 
 from . import __version__, pdbqt
 from .io import sas
-from .io.atlas_source import Source, pose_records, top_record
+from .io.atlas_source import Source, _manifest_entry, _write_atomic, pose_records, top_record
 from .selection import Selection, _check_mode, _check_pocket, _pick_poses, _short, name_part
 
 logger = logging.getLogger(__name__)
@@ -614,6 +614,7 @@ class Atlas:
         self._sas_files: Optional[Dict[str, list]] = None  # sas/MANIFEST.json, read on first use
         self._chembl_files: Optional[Dict[str, list]] = None  # chembl_any/MANIFEST.json, read on first use
         self._chembl_strict: Optional[dict] = None  # chembl_any/strict.json.gz, read on first use
+        self._checked: set = set()  # sas/ and chembl_any/ listings checked with the server (_check_listing)
         self._fetched_again: set = set()  # sas/ and chembl_any/ listings fetched again (_fetch_listing_again)
 
     def _read_meta(self) -> dict:
@@ -1008,7 +1009,7 @@ class Atlas:
             try:
                 path = self.source.file(f"sas/{uniprot}.json.gz", size=entry[1], sha256=entry[0])
             except ValueError:  # not the file the listing says: the listing in the cache may be older than the file
-                if not self._fetch_listing_again(SAS_MANIFEST):
+                if not self._fetch_listing_again(SAS_MANIFEST, conditional=False):
                     raise
                 return self._sas(uniprot)
             with open(path, "rb") as f:
@@ -1020,8 +1021,10 @@ class Atlas:
             return None
 
     def _sas_listing(self) -> dict:
-        """sas/MANIFEST.json, {"<U>.json.gz": [sha256, bytes]}, read once; {} when the release has no sas/."""
+        """sas/MANIFEST.json, {"<U>.json.gz": [sha256, bytes]}, read once (over HTTP checked with the server first:
+        ``_check_listing``); {} when the release has no sas/."""
         if self._sas_files is None:
+            self._check_listing(SAS_MANIFEST)
             try:
                 listed = self.source.json(SAS_MANIFEST)
             except FileNotFoundError:
@@ -1059,9 +1062,11 @@ class Atlas:
         return records, self._strict_links()
 
     def _chembl_listing(self) -> dict:
-        """chembl_any/MANIFEST.json, {"<path in chembl_any/>": [sha256, bytes]}, read once; {} when the release has no
-        chembl_any/. ValueError if it is not such a listing (then it is read again next time)."""
+        """chembl_any/MANIFEST.json, {"<path in chembl_any/>": [sha256, bytes]}, read once (over HTTP checked with the
+        server first: ``_check_listing``); {} when the release has no chembl_any/. ValueError if it is not such a
+        listing (then it is read again next time)."""
         if self._chembl_files is None:
+            self._check_listing(CHEMBL_MANIFEST)
             try:
                 listed = self.source.json(CHEMBL_MANIFEST)
             except FileNotFoundError:
@@ -1082,26 +1087,51 @@ class Atlas:
         try:
             path = self.source.file(f"{CHEMBL_DIR}/{rel}", size=entry[1], sha256=entry[0])
         except ValueError:  # not the file the listing says: the listing in the cache may be older than the file
-            if not self._fetch_listing_again(CHEMBL_MANIFEST):
+            if not self._fetch_listing_again(CHEMBL_MANIFEST, conditional=False):
                 raise
             return self._chembl_json(rel)
         with open(path, "rb") as f:
             data = f.read()
         return json.loads(gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data)
 
-    def _fetch_listing_again(self, listing: str) -> bool:
-        """Over HTTP, once per Atlas: a listing (SAS_MANIFEST or CHEMBL_MANIFEST) fetched again from the server into
-        the cache, as the site may have made its folder again since the cache got it (download() does it first; a
-        page, when a file does not match the listing). The listing and what was read with it are then read again.
-        False for a folder, or when it was done already (a file that still does not match is damaged). ValueError
-        when the answer is not a listing (the one in the cache is kept), OSError without network."""
-        if self.source.url is None or listing in self._fetched_again:
-            return False
-        self._fetched_again.add(listing)
+    def _check_listing(self, listing: str) -> None:
+        """Over HTTP, once per Atlas, before a listing (SAS_MANIFEST or CHEMBL_MANIFEST) is first read: its copy in the
+        cache checked with the server, as the site may have made its folder again since the cache got it (a
+        conditional request, ``Source._fetch_again``: HTTP 304 when the copy is the server's, else the server's listing
+        replaces it). So a page has the site's SAS points and ChEMBL values, not older ones the cache still has.
+        Without an answer (no network, a server error, an answer that is not a listing) the copy in the cache is read
+        as it is (an info line in the log); a later Atlas asks again."""
+        if self.source.url is None or listing in self._checked:
+            return
+        self._checked.add(listing)
         try:
             self.source._fetch_again(listing)
         except FileNotFoundError:  # the release has no such folder
             pass
+        except (OSError, ValueError) as e:
+            logger.info("%s cannot be checked with the server now (the copy in the cache, if any, is read): %s",
+                        listing, e)
+
+    def _fetch_listing_again(self, listing: str, conditional: bool = True) -> bool:
+        """Over HTTP, once per Atlas: a listing (SAS_MANIFEST or CHEMBL_MANIFEST) fetched again from the server into
+        the cache, as the site may have made its folder again since the cache got it (download() does it first; a
+        page, when a file does not match the listing: ``conditional=False``, a plain request, so that a wrong HTTP 304,
+        e.g. of a server without ETags, cannot keep an older listing). The listing and what was read with it are then
+        read again (also after HTTP 304: the copy in the cache is the server's, and may be newer than the one this
+        Atlas read, e.g. when another Atlas fetched it since). False for a folder, or when it was done already (a file
+        that still does not match is damaged). ValueError when the answer is not a listing (the one in the cache is
+        kept), OSError without network (then it may be fetched again later, e.g. by download())."""
+        if self.source.url is None or listing in self._fetched_again:
+            return False
+        self._fetched_again.add(listing)
+        self._checked.add(listing)  # asked now: not checked again before it is read
+        try:
+            self.source._fetch_again(listing, conditional)
+        except FileNotFoundError:  # the release has no such folder
+            pass
+        except OSError:  # no answer now (e.g. no network): not done
+            self._fetched_again.discard(listing)
+            raise
         if listing == SAS_MANIFEST:
             self._sas_files = None
         else:
@@ -1113,35 +1143,18 @@ class Atlas:
         "moa": {catalogue number: [UniProt]}, read once: the links of the strict ChEMBL values, the other drug a
         value's structure is, and the mechanisms ChEMBL records on a salt or alternative form of a drug
         (``_with_salt_forms``). A file without "moa" (made before the site added it, 19 Nov 2026) leaves the release's
-        flags as they are; over HTTP such a copy in the cache has its listing fetched again once, as the server's file
-        may be newer. Empty without the file, and when it cannot be read now (a warning; read again next time): the
-        strict values are then as on a release without chembl_any/."""
+        flags as they are (over HTTP the listing is checked with the server first, so a copy in the cache older than
+        the server's file is not read). Empty without the file, and when it cannot be read now (a warning; read again
+        next time): the strict values are then as on a release without chembl_any/."""
         if self._chembl_strict is None:
             try:
                 links = _check_strict(self._chembl_json(CHEMBL_STRICT))
-                if "moa" not in links:
-                    links = self._newer_strict_links(links)
             except (OSError, ValueError, EOFError, zlib.error) as e:
                 logger.warning('the "ChEMBL Strict" values of the page have fewer links and leave out mechanisms on '
                                'salt forms: %s/%s cannot be read: %s', CHEMBL_DIR, CHEMBL_STRICT, e)
                 return {"pvl": {}, "xo": {}}
             self._chembl_strict = links
         return self._chembl_strict
-
-    def _newer_strict_links(self, links: dict) -> dict:
-        """strict.json.gz read again after its listing is fetched again (over HTTP, once per Atlas:
-        ``_fetch_listing_again``), for a file without "moa" that may be an older copy in the cache. ``links`` as they
-        are for a folder, without network, or when the server's answer cannot be used (no warning: they are what the
-        page had before). Without an answer (e.g. no network now) the listing may be fetched again later, e.g. by
-        download(); this runs once per Atlas either way (``_strict_links`` keeps what it returns)."""
-        try:
-            if self._fetch_listing_again(CHEMBL_MANIFEST):
-                return _check_strict(self._chembl_json(CHEMBL_STRICT))
-        except OSError:
-            self._fetched_again.discard(CHEMBL_MANIFEST)
-        except (ValueError, EOFError, zlib.error):
-            pass
-        return links
 
     def _structure(self, data: dict) -> str:
         """PDB text of the AlphaFold model the drugs were docked into (structures/<AF id>.pdb.gz of the release, or
@@ -1393,7 +1406,7 @@ class Atlas:
                        if rel.startswith(folder + "/")}
             if entries:
                 listings[name] = json.dumps(dict(sorted(entries.items())), indent=0).encode("utf-8")
-                _write_bytes(os.path.join(out, *name.split("/")), listings[name])
+                _write_atomic(os.path.join(out, *name.split("/")), listings[name])
         subset = {"proteins": uniprots, "of": self.source.location, "release": self.release,
                   "created": datetime.now(timezone.utc).isoformat(timespec="seconds"), "pocketvina": __version__,
                   "note": SUBSET_NOTE}
@@ -1403,8 +1416,8 @@ class Atlas:
         for name, data in listings.items():
             listed[name] = {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
         manifest = {"release": self.release, "subset": subset, "files": dict(sorted(listed.items()))}
-        _write_bytes(os.path.join(out, "MANIFEST.json"), (json.dumps(manifest, indent=1) + "\n").encode("utf-8"))
-        _write_bytes(os.path.join(out, "meta.json"), meta)  # last: the folder is a release once it has meta.json
+        _write_atomic(os.path.join(out, "MANIFEST.json"), (json.dumps(manifest, indent=1) + "\n").encode("utf-8"))
+        _write_atomic(os.path.join(out, "meta.json"), meta)  # last: the folder is a release once it has meta.json
         logger.info("PocketVina Atlas %s in %s: %s, every file checked", self.release, out, ", ".join(uniprots))
         return out
 
@@ -1560,12 +1573,6 @@ def _earlier_download(out: str, release: str) -> List[str]:
     return []
 
 
-def _manifest_entry(entry) -> bool:
-    """Whether an entry of sas/MANIFEST.json or chembl_any/MANIFEST.json is [sha256, bytes]."""
-    return (isinstance(entry, list) and len(entry) == 2 and isinstance(entry[0], str) and isinstance(entry[1], int)
-            and not isinstance(entry[1], bool))
-
-
 def _has_size(path: str, size: Optional[int]) -> bool:
     """Whether the file is there with this size (any size when the release does not say)."""
     try:
@@ -1586,17 +1593,6 @@ def _kept(path: str, size: Optional[int], sha256: Optional[str]) -> Optional[Tup
             h.update(chunk)
     digest = h.hexdigest()
     return (os.path.getsize(path), digest) if sha256 is None or digest == sha256 else None
-
-
-def _write_bytes(path: str, data: bytes) -> None:
-    tmp = f"{path}.tmp-{os.getpid()}"
-    try:
-        with open(tmp, "wb") as f:
-            f.write(data)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
 
 
 class _PairSource:

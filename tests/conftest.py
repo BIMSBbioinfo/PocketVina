@@ -39,6 +39,7 @@ import sys
 import threading
 import urllib.parse
 from dataclasses import dataclass
+from email.utils import formatdate, parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -273,7 +274,9 @@ class _FileHandler(BaseHTTPRequestHandler):
     connection closes. ``server.hang_up = n``: the next n answers are whole, then the connection closes without
     saying so (as a server does with a connection kept open too long). ``server.fail = n``: the next n requests get
     status 503. A path under "moved/" is redirected (301) to
-    the same path without it. Connections are kept open between requests (HTTP/1.1)."""
+    the same path without it. Connections are kept open between requests (HTTP/1.1). A file is sent with its
+    Last-Modified and an ETag (``server.etags = False``: without the ETag); a conditional request (If-None-Match, else
+    If-Modified-Since) for a file not changed gets status 304, without a body."""
 
     protocol_version = "HTTP/1.1"
 
@@ -304,6 +307,24 @@ class _FileHandler(BaseHTTPRequestHandler):
             self.send_error(404, "no such file")
             return
         data = path.read_bytes()
+        validators = {"Last-Modified": formatdate(int(path.stat().st_mtime), usegmt=True)}
+        if self.server.etags:
+            validators["ETag"] = f'"{hashlib.sha256(data).hexdigest()[:16]}"'
+        if_none_match, if_modified_since = self.headers.get("If-None-Match"), self.headers.get("If-Modified-Since")
+        if if_none_match is not None or if_modified_since is not None:
+            # If-None-Match decides when it is there (RFC 9110), else If-Modified-Since
+            if if_none_match is not None:
+                same = if_none_match == validators.get("ETag")
+            else:
+                since = parsedate_to_datetime(if_modified_since)
+                same = since is not None and int(path.stat().st_mtime) <= since.timestamp()
+            self.server.conditional.append((rel, 304 if same else 200))
+            if same:
+                self.send_response(304)
+                for name, value in validators.items():
+                    self.send_header(name, value)
+                self.end_headers()
+                return
         asked = re.match(r"bytes=(\d+)-(\d+)$", self.headers.get("Range") or "")
         if asked and self.server.ranges:
             start, end = int(asked.group(1)), int(asked.group(2))
@@ -316,6 +337,8 @@ class _FileHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Length", str(len(body)))
+        for name, value in validators.items():
+            self.send_header(name, value)
         if status == 206:
             self.send_header("Content-Range", f"bytes {start}-{start + len(body) - 1}/{len(data)}")
         self.end_headers()
@@ -334,7 +357,9 @@ class FixtureServer(ThreadingHTTPServer):
     ``(path, Range header)`` per request), ``connections`` (connections opened to it), ``ranges`` (set it to False
     to answer Range requests with the whole file, as some servers do), ``cut`` (set it to n to drop the connection
     halfway through the next n answers), ``hang_up`` (set it to n to close the connection after each of the next
-    n answers) and ``fail`` (set it to n to answer the next n requests with status 503)."""
+    n answers), ``fail`` (set it to n to answer the next n requests with status 503), ``etags`` (set it to False to
+    send files without an ETag, Last-Modified only) and ``conditional`` (one ``(path, status)`` per conditional
+    request: 304 or 200)."""
 
     daemon_threads = True
 
@@ -342,6 +367,8 @@ class FixtureServer(ThreadingHTTPServer):
         super().__init__(("127.0.0.1", 0), _FileHandler)
         self.root = str(root)
         self.requests = []
+        self.conditional = []
+        self.etags = True
         self.ranges = True
         self.cut = 0
         self.hang_up = 0

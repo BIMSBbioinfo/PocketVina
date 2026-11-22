@@ -7,7 +7,8 @@
     src.copy("poses/P00519.poses", "my_atlas/poses/P00519.poses", size=..., sha256=...)  # a checked copy, streamed
 
 Whole files fetched over HTTP are kept in ``<cache_root()>/atlas/<release>/<path>`` (``pocketvina.p2rank.cache_root``)
-and reused: a final release never changes. Byte ranges of a final release are kept in memory (``RANGE_CACHE`` bytes
+and reused: a final release never changes (the site may make sas/ and chembl_any/ again: their listings are checked
+with the server, ``Source._fetch_again``). Byte ranges of a final release are kept in memory (``RANGE_CACHE`` bytes
 per Source). HTTP uses http.client (standard library) with connections kept open and reused (``MAX_IDLE`` per
 server; through a proxy, and to follow a redirect: urllib, one connection per request; after a permanent redirect
 requests go to the new place), with a timeout and 3 retries for connection errors, server errors (5xx) and answers cut
@@ -69,6 +70,24 @@ def _rel(path) -> str:
 
 def _folder_name(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("._") or "release"
+
+
+def _write_atomic(path: str, data: bytes) -> None:
+    """Write a file whole: a temp file next to it, renamed, so another process never reads half of it."""
+    tmp = f"{path}.tmp-{os.getpid()}-{threading.get_ident()}"
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def _manifest_entry(entry) -> bool:
+    """Whether an entry of sas/MANIFEST.json or chembl_any/MANIFEST.json is [sha256, bytes]."""
+    return (isinstance(entry, list) and len(entry) == 2 and isinstance(entry[0], str) and isinstance(entry[1], int)
+            and not isinstance(entry[1], bool))
 
 
 def _is_file_as(path: str, size: Optional[int], sha256: Optional[str]) -> bool:
@@ -165,27 +184,50 @@ class Source:
         self.copy(rel, target, size=size, sha256=sha256)
         return target
 
-    def _fetch_again(self, path: str) -> None:
+    def _fetch_again(self, path: str, conditional: bool = True) -> None:
         """Over HTTP: a listing of files (a JSON object) fetched again into the cache, even of a final release, as the
-        site may make it again after the cache got it (sas/ and chembl_any/MANIFEST.json:
-        ``Atlas._fetch_listing_again``). An answer that is not a JSON object (e.g. a Wi-Fi login page) never replaces
-        the copy in the cache: ValueError."""
+        site may make it again after the cache got it (sas/ and chembl_any/MANIFEST.json: ``Atlas._check_listing``,
+        ``Atlas._fetch_listing_again``). The request is conditional when the cache has the ETag and Last-Modified the
+        server sent with its copy (kept next to it in ``<file>.headers.json`` with the copy's sha256): HTTP 304 (not
+        modified) keeps the copy. ``conditional=False``: a plain request, which a wrong HTTP 304 cannot stop. An answer
+        that is not a listing (a JSON object with [sha256, bytes] entries; e.g. a Wi-Fi login page, or {"error": ...})
+        never replaces the copy in the cache: ValueError."""
         rel = _rel(path)
         target = self._cache_path(rel)[0]
-        fetched = f"{target}.fetched-{os.getpid()}-{threading.get_ident()}"
+        saved = f"{target}.headers.json"
+        conditions = {}
+        if conditional:
+            try:
+                with open(target, "rb") as f:
+                    digest = hashlib.sha256(f.read()).hexdigest()
+                with open(saved, "rb") as f:
+                    kept = json.loads(f.read())
+                if isinstance(kept, dict) and kept.get("sha256") == digest:  # the headers of this copy, not another's
+                    for header, condition in (("ETag", "If-None-Match"), ("Last-Modified", "If-Modified-Since")):
+                        if isinstance(kept.get(header), str):
+                            conditions[condition] = kept[header]
+            except (OSError, ValueError):  # no copy or no headers yet (e.g. a cache of PocketVina 0.4.5): plain request
+                pass
+
+        def read(response):
+            if response.status == 304:
+                return None
+            return response.read(), {header: response.headers.get(header) for header in ("ETag", "Last-Modified")}
+
+        got = self._request(rel, conditions, read)
+        if got is None:  # HTTP 304
+            return
+        data, headers = got
         try:
-            self.copy(rel, fetched)
-            with open(fetched, "rb") as f:
-                try:
-                    listing = json.loads(f.read())
-                except ValueError:
-                    listing = None
-            if not isinstance(listing, dict):
-                raise ValueError(f"{self.location}: {rel} is not a listing of files (JSON)")
-            os.replace(fetched, target)
-        finally:
-            if os.path.exists(fetched):
-                os.unlink(fetched)
+            listing = json.loads(data)
+        except ValueError:
+            listing = None
+        if not isinstance(listing, dict) or not any(_manifest_entry(entry) for entry in listing.values()):
+            raise ValueError(f"{self.location}: {rel} is not a listing of files (JSON)")
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        _write_atomic(target, data)  # each file whole: another process may read it now
+        headers = {header: value for header, value in headers.items() if value}
+        _write_atomic(saved, json.dumps(dict(headers, sha256=hashlib.sha256(data).hexdigest())).encode("utf-8"))
 
     def copy(self, path: str, target, size: Optional[int] = None, sha256: Optional[str] = None,
              progress: Optional[Callable[[int], None]] = None) -> Tuple[int, str]:
@@ -392,7 +434,8 @@ class Source:
 
     def _request(self, rel: str, headers: Optional[dict], read: Callable):
         """``read(response)`` of a GET of a file of the release (``read(None)`` for HTTP 416: a byte range past its
-        end). Connection errors, server errors (5xx) and errors while ``read`` reads the body (a body cut short raises
+        end; HTTP 304, the answer to a conditional request for a file not changed, is a response without a body).
+        Connection errors, server errors (5xx) and errors while ``read`` reads the body (a body cut short raises
         http.client.IncompleteRead) are tried again, 3 times; HTTP 404 raises FileNotFoundError."""
         quoted = urllib.parse.quote(rel)
         url = self._base + quoted
@@ -558,6 +601,8 @@ def _urlopen(url: str, headers: dict, read: Callable, moved: Optional[Callable[[
     except urllib.error.HTTPError as e:
         if e.code == 416:
             return read(None)
+        if e.code == 304:  # not modified (a conditional request), which urllib raises: an answer without a body
+            return read(e)
         raise _Status(e.code, e.reason) from None
 
 

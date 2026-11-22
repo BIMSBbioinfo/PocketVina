@@ -388,7 +388,8 @@ To read the folder by default, set `POCKETVINA_ATLAS` to its full path, for exam
 ## Where files are kept
 
 Files read over the internet are kept in `~/.cache/pocketvina/atlas/` (or `$XDG_CACHE_HOME/pocketvina/atlas/`), so
-the second look is fast. You can delete this folder at any time.
+the second look is fast. The lists of the SAS point files and ChEMBL files are checked with the server once for each
+`Atlas()`, so updates of the site show up without deleting the folder. You can delete this folder at any time.
 
 ## Citing
 
