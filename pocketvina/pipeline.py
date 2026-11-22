@@ -81,7 +81,8 @@ _LOG_SEED_RE = re.compile(r"Using random seed:\s*(-?\d+)")
 _LOG_PARSE_ERROR = "Parse error"  # main.cpp: the engine skips a ligand it cannot parse
 _MODEL_RE = re.compile(rb"^MODEL\s+(\d+)")
 _UNIPROT_RE = re.compile(r"^AF-([A-Z0-9]{6,10})-F\d+")
-_P2RANK_FATAL = ("UnsupportedClassVersionError",)  # Java older than P2Rank needs
+# Java older than P2Rank needs; newer than its Groovy can read (Groovy fails with "BUG! exception in phase...")
+_P2RANK_FATAL = ("UnsupportedClassVersionError", "Unsupported class file major version")
 SLOT_ENV = "POCKETVINA_ENGINE_SLOT"  # set for the engines of a slot pool ("<pool marker><slot>"), see _kill_engines
 # while the main thread waits for engine calls it checks this often that the slots are alive and whether they have
 # taken the queued calls (the next protein is then prepared)
@@ -224,7 +225,7 @@ def predict_pockets(structure, work_dir, p2rank_config: Optional[P2RankConfig] =
     every ``P2RANK_POLL_S`` seconds while P2Rank runs (``run_atlas`` records the engine calls that are back meanwhile);
     if it raises, or the wait is interrupted, P2Rank is killed (with its Java process). P2Rank is the one of
     ``p2rank.ensure_p2rank()``, downloaded into the user cache first if there is none. ``RunAborted`` if P2Rank or
-    Java cannot be started, ``RuntimeError`` if the prediction fails.
+    Java cannot be started or the Java is not one P2Rank runs on, ``RuntimeError`` if the prediction fails.
     """
     cfg = p2rank_config or P2RankConfig()
     work_dir = os.path.abspath(os.fspath(work_dir))
@@ -236,6 +237,11 @@ def predict_pockets(structure, work_dir, p2rank_config: Optional[P2RankConfig] =
         with open(pdb, "w") as f:
             f.write(_pdb_from_pdbqt(read_structure(source)[1]))
         source = pdb
+    # on a Java too old or too new for it P2Rank would be downloaded and started only to stop with a Java or Groovy
+    # error: say what to do instead. A Java whose version cannot be read is tried.
+    found = p2rank.java_version()
+    if found is not None and not p2rank.JAVA_MIN <= found <= p2rank.JAVA_MAX:
+        raise RunAborted(f"P2Rank cannot run: {p2rank.java_problem()}")
     try:
         prank = p2rank.ensure_p2rank()
     except p2rank.P2RankError as e:
@@ -253,7 +259,7 @@ def predict_pockets(structure, work_dir, p2rank_config: Optional[P2RankConfig] =
         stdout = _communicate(proc, while_running)
     tail = stdout[-2000:].strip()
     if proc.returncode in (126, 127) or any(s in stdout for s in _P2RANK_FATAL):
-        java = p2rank.java_problem() or f"it needs Java {p2rank.JAVA_MIN} or later"
+        java = p2rank.java_problem() or f"it needs Java {p2rank.JAVA_MIN} to {p2rank.JAVA_MAX}"
         raise RunAborted(f"P2Rank cannot run (exit code {proc.returncode}; {java}): {tail}")
     if proc.returncode != 0:
         raise RuntimeError(f"P2Rank failed with exit code {proc.returncode}: {tail}")

@@ -1084,7 +1084,7 @@ def setup_group():
 @click.option("--check", is_flag=True, help="Only show the P2Rank and Java that runs use; install nothing.")
 @click.pass_context
 def setup_p2rank(ctx, root, archive, force, check):
-    """Download P2Rank (the pocket predictor) once, and check the Java 17+ it needs.
+    """Download P2Rank (the pocket predictor) once, and check the Java 17 to 25 it needs.
 
     Nothing is installed if a P2Rank is found: $P2RANK_HOME, P2Rank's `prank` launcher on PATH, the
     p2rank_2.5 folder of an older source install, or the user cache ($XDG_CACHE_HOME/pocketvina or
@@ -1093,7 +1093,7 @@ def setup_p2rank(ctx, root, archive, force, check):
     it too; this does it ahead of a run, e.g. on a login node that has internet access. Without internet access,
     download the release file elsewhere and pass it with --from.
 
-    Exit code 1 if P2Rank is missing (--check) or cannot be installed, or if there is no Java 17 or later.
+    Exit code 1 if P2Rank is missing (--check) or cannot be installed, or if there is no Java 17 to 25.
     """
     _setup_logging(ctx)
     if check and (root or archive or force):

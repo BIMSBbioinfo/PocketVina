@@ -466,6 +466,11 @@ class P2RankProcessor:
         self.logger.info(f"Running P2Rank on {pdb_file}")
 
         try:
+            # on a Java too old or too new for it P2Rank would be downloaded and started only to stop with a Java or
+            # Groovy error: say what to do instead. A Java whose version cannot be read is tried.
+            found = p2rank.java_version()
+            if found is not None and not p2rank.JAVA_MIN <= found <= p2rank.JAVA_MAX:
+                raise p2rank.JavaError(p2rank.java_problem())
             # Run P2Rank ($P2RANK_HOME, prank on PATH, p2rank_2.5 in the package or the user cache, downloaded there
             # once if there is none; see pocketvina.p2rank)
             result = subprocess.run([

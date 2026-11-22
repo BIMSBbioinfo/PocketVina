@@ -9,8 +9,14 @@ dynamic = ["version"]  # pocketvina.__version__
 description = "GPU-accelerated protein-ligand docking with automated pocket detection, exploring through multi-pocket conditioning."
 readme = "README.md"
 requires-python = ">=3.9"
-license = "MIT"
-license-files = ["LICENSE"]
+# PocketVina is MIT (LICENSE). The engine (pocketvina/main, lib, OpenCL and the prebuilt PocketVina-GPU) is based on
+# AutoDock Vina and QuickVina2-GPU 2.1 (Apache-2.0, LICENSES/VINA_GPU_LICENSE) and includes nlohmann/json
+# (pocketvina/lib/json.hpp, MIT, LICENSES/NLOHMANN_JSON_LICENSE); the prebuilt binary has Boost compiled in (BSL-1.0,
+# LICENSES/BOOST_LICENSE). The Mol* bundle of the notebook viewer: Mol*, immutable and mutative (MIT),
+# rxjs (Apache-2.0), tslib (0BSD), with their texts next to it
+license = "MIT AND Apache-2.0 AND BSL-1.0 AND 0BSD"
+license-files = ["LICENSE", "LICENSES/*_LICENSE", "pocketvina/viewer/molstar-pv-5.13.1/LICENSE",
+                 "pocketvina/viewer/molstar-pv-5.13.1/THIRD-PARTY-LICENSES.txt"]
 authors = [{ name = "Ahmet Sarigun", email = "Ahmet.Sariguen@mdc-berlin.de" }]
 keywords = ["docking", "virtual screening", "GPU", "OpenCL", "P2Rank", "AutoDock Vina"]
 classifiers = [
@@ -22,7 +28,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Chemistry",
 ]
 # pip only copies files: the engine is a prebuilt binary in the package (rebuild it with `make -C pocketvina`), P2Rank
-# is downloaded at first use (`pocketvina setup p2rank`), Java 17+ comes from the system or conda (openjdk).
+# is downloaded at first use (`pocketvina setup p2rank`), Java 17 to 25 comes from the system or conda (openjdk).
 # OpenBabel: the openbabel-wheel package on PyPI; conda environments use conda-forge's openbabel instead (it provides
 # the same `openbabel` module), e.g. `conda install -c conda-forge openbabel` + `pip install --no-deps .`
 # pandas < 3: pandas 3 reads missing strings from Parquet as NaN instead of None (tested with pandas 2.x)

@@ -8,6 +8,7 @@ files that are not part of the package; all of them must stay out of both archiv
 """
 import ast
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -25,7 +26,7 @@ PACKAGE_DIR = REPO_ROOT / "pocketvina"
 ENGINE = PACKAGE_DIR / "PocketVina-GPU"
 TRIPWIRES = ("gcc", "g++", "cc", "c++", "make", "cmake", "wget", "curl", "conda", "mamba", "apt-get", "sudo", "git")
 BUILD_TIMEOUT_S = 300
-VERSION = "0.4.4"
+VERSION = "0.4.5"
 KERNELS = sorted(p.name for p in (PACKAGE_DIR / "OpenCL" / "src" / "kernels").glob("*.cl"))
 MAKE_VARS = ("BOOST_ROOT", "BOOST_LIB_PATH", "OPENCL_ROOT", "OPENCL_LIB_PATH", "PREFIX", "DESTDIR", "CXX", "CXXFLAGS",
              "LDFLAGS", "MAKEFLAGS", "MFLAGS")
@@ -35,6 +36,12 @@ VIEWER_FILES = {f"pocketvina/viewer/{n}" for n in (
     "viewer.js", "viewer.css", "bridge.js", "workspace.js", "workspace.css", "README.md",
     "molstar-pv-5.13.1/molstar-pv.js", "molstar-pv-5.13.1/molstar-pv.css", "molstar-pv-5.13.1/LICENSE",
     "molstar-pv-5.13.1/THIRD-PARTY-LICENSES.txt", "molstar-pv-5.13.1/SOURCES.txt")}
+# the licence texts (pyproject.toml's license-files): PocketVina, the engine's AutoDock Vina / QuickVina2-GPU 2.1,
+# nlohmann/json and Boost (compiled into the prebuilt binary), the Mol* bundle
+LICENSE_FILES = ("LICENSE", "LICENSES/VINA_GPU_LICENSE", "LICENSES/NLOHMANN_JSON_LICENSE", "LICENSES/BOOST_LICENSE",
+                 "pocketvina/viewer/molstar-pv-5.13.1/LICENSE",
+                 "pocketvina/viewer/molstar-pv-5.13.1/THIRD-PARTY-LICENSES.txt")
+LICENSE_EXPRESSION = "MIT AND Apache-2.0 AND BSL-1.0 AND 0BSD"
 NOT_PACKAGED = ("benchmark/astex/main.py", "doc/assets/pocketvina_figure.png", "app/app.py", "scripts_test/run.sh",
                 "Dockerfile", ".dockerignore", ".gitignore")
 needs_make = pytest.mark.skipif(shutil.which("make") is None, reason="needs GNU make")
@@ -55,7 +62,7 @@ def _copy_checkout(dst: Path, engine: bytes = None) -> Path:
     dst.mkdir(parents=True)
     for name in ("pyproject.toml", "setup.py", "MANIFEST.in", "README.md", "LICENSE"):
         shutil.copy2(REPO_ROOT / name, dst / name)
-    for name in ("pocketvina", "tests", "example", "notebooks"):
+    for name in ("pocketvina", "tests", "example", "notebooks", "LICENSES"):
         shutil.copytree(REPO_ROOT / name, dst / name, ignore=skip, symlinks=True)
     pkg = dst / "pocketvina"
     (pkg / "p2rank_2.5" / "bin").mkdir(parents=True)
@@ -168,6 +175,12 @@ def test_wheel_contents(tmp_path):
         assert not any(unwanted in n for n in names), unwanted
     assert "[console_scripts]\npocketvina = pocketvina.cli:main" in entry_points
     assert f"Version: {VERSION}" in meta and "Requires-Python: >=3.9" in meta
+    # the licences (PEP 639): the expression, and each text in .dist-info/licenses/ under its path in the source
+    assert f"License-Expression: {LICENSE_EXPRESSION}" in meta.splitlines()
+    assert {line.split(": ", 1)[1] for line in meta.splitlines() if line.startswith("License-File: ")} == set(
+        LICENSE_FILES)
+    for name in LICENSE_FILES:
+        assert z_bytes(whl, f"pocketvina-{VERSION}.dist-info/licenses/{name}") == (REPO_ROOT / name).read_bytes()
     requires = {line.split(": ", 1)[1] for line in meta.splitlines() if line.startswith("Requires-Dist: ")}
     assert {"numpy", "pandas<3", "rdkit", "openbabel-wheel", "pyarrow", "duckdb", "click", "tqdm"} <= requires
     assert 'tomli; python_version < "3.11"' in requires
@@ -206,6 +219,8 @@ def test_sdist_contents(tmp_path):
     assert sdist.name == f"pocketvina-{VERSION}.tar.gz"
     with tarfile.open(sdist) as tar:
         members = {m.name.split("/", 1)[1]: m for m in tar.getmembers() if "/" in m.name}
+        pkg_info = tar.extractfile(f"pocketvina-{VERSION}/PKG-INFO").read().decode()
+        licenses = {name: tar.extractfile(members[name]).read() for name in LICENSE_FILES if name in members}
     names = set(members)
     for needed in ("pyproject.toml", "setup.py", "MANIFEST.in", "README.md", "LICENSE", "pocketvina/Makefile",
                    "pocketvina/PocketVina-GPU", "pocketvina/main/main.cpp", "pocketvina/lib/main_procedure_cl.cpp",
@@ -215,6 +230,11 @@ def test_sdist_contents(tmp_path):
         assert needed in names, needed
     assert VIEWER_FILES <= names
     assert {f"pocketvina/OpenCL/src/kernels/{k}" for k in KERNELS} <= names
+    # the licence texts, and the expression and files in the metadata (PKG-INFO)
+    assert licenses == {name: (REPO_ROOT / name).read_bytes() for name in LICENSE_FILES}
+    assert f"License-Expression: {LICENSE_EXPRESSION}" in pkg_info.splitlines()
+    assert {line.split(": ", 1)[1] for line in pkg_info.splitlines() if line.startswith("License-File: ")} == set(
+        LICENSE_FILES)
     assert members["pocketvina/PocketVina-GPU"].mode & stat.S_IXUSR
     for unwanted in ("boost_1_77_0", "p2rank_2.5", "QuickVina2", "Kernel1_Opt.bin", "__pycache__", ".pyc"):
         assert not any(unwanted in n for n in names), unwanted
@@ -241,6 +261,21 @@ def test_sdist_tests_skip_what_only_the_repository_has(tmp_path):
 
 
 # --- the engine Makefile -------------------------------------------------------------------------------------------
+
+def test_engine_sources_build_with_a_current_boost():
+    """No header or function that Boost 1.85 removed (boost/filesystem/convenience.hpp: basename, extension,
+    change_extension), so the engine builds with conda-forge's Boost without a patched header; and none of the
+    Boost.Timer headers that Boost marks for removal (boost/progress.hpp, boost/timer.hpp), which compile only with
+    BOOST_TIMER_ENABLE_DEPRECATED."""
+    sources = [p for sub in ("main", "lib", "OpenCL") for p in (PACKAGE_DIR / sub).rglob("*")
+               if p.suffix in (".cpp", ".h", ".hpp", ".cl")]
+    assert len(sources) > 50
+    for path in sources:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        assert "boost/filesystem/convenience.hpp" not in text, path
+        assert not re.search(r"filesystem::(basename|extension|change_extension)\s*\(", text), path
+        assert not re.search(r"boost/(progress|timer)\.hpp", text), path
+
 
 def _make(*args, cwd=PACKAGE_DIR, env_extra=None, check=True) -> subprocess.CompletedProcess:
     env = {k: v for k, v in os.environ.items() if k not in MAKE_VARS}

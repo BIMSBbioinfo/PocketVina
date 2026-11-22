@@ -5,13 +5,13 @@
 Install PocketVina from PyPI into a new conda environment:
 
 ```bash
-conda create -n pocketvina -c conda-forge python=3.11 "openjdk>=17" -y
+conda create -n pocketvina -c conda-forge python=3.11 "openjdk>=17,<26" -y
 conda activate pocketvina
 pip install pocketvina
 ```
 
 This installs PocketVina with everything it uses, including the docking engine. P2Rank, the pocket finder, is
-downloaded into `~/.cache/pocketvina` at the first run. If you already have Python and Java 17 or later,
+downloaded into `~/.cache/pocketvina` at the first run. If you already have Python and Java 17 to 25,
 `pip install pocketvina` alone is enough. Java is needed for P2Rank.
 
 ### From source
@@ -21,7 +21,7 @@ To use the latest code, or to have the example files of the [quick start](quicks
 ```bash
 git clone https://github.com/BIMSBbioinfo/PocketVina
 cd PocketVina
-conda create -n pocketvina -c conda-forge python=3.11 "openjdk>=17" -y
+conda create -n pocketvina -c conda-forge python=3.11 "openjdk>=17,<26" -y
 conda activate pocketvina
 pip install .
 ```
@@ -36,7 +36,7 @@ You need:
 - The OpenCL loader `libOpenCL.so.1`, from the package `ocl-icd-libopencl1` on Debian and Ubuntu.
 - The file `/etc/OpenCL/vendors/nvidia.icd`, which points OpenCL to the NVIDIA driver.
 - Python 3.9 or later. The Mol\* views of `pocketvina.viz` need Python 3.10 or later.
-- Java 17 or later, for P2Rank.
+- Java 17 to 25, for P2Rank. Java 26 and later are too new for it.
 - For the prebuilt engine, Ubuntu 22.04, Debian 12, RHEL 9 or a newer system. Google Colab works. On older systems,
   use the [conda packages](#conda-packages) or [build the engine](#building-the-engine).
 
@@ -125,7 +125,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install pocketvina
 ```
 
-Java 17 or later must then come from your system. This shows the Java and P2Rank that a run uses:
+Java 17 to 25 must then come from your system. This shows the Java and P2Rank that a run uses:
 
 ```bash
 pocketvina setup p2rank --check
@@ -162,15 +162,14 @@ conda activate pocketvina
 or changed code. Run `make` before `pip install .`, here with the compiler, Boost and OpenCL of conda-forge:
 
 ```bash
-conda create -n pocketvina-src -c conda-forge python=3.11 cxx-compiler make "libboost-devel<1.85" \
-    ocl-icd ocl-icd-system opencl-headers "openjdk>=17"
+conda create -n pocketvina-src -c conda-forge python=3.11 cxx-compiler make libboost-devel \
+    ocl-icd ocl-icd-system opencl-headers "openjdk>=17,<26"
 conda activate pocketvina-src
 cd PocketVina
 make -C pocketvina BOOST_ROOT="$CONDA_PREFIX" OPENCL_ROOT="$CONDA_PREFIX"
 pip install .
 ```
 
-- Boost 1.85 and later lack headers the engine needs, hence `libboost-devel<1.85`.
 - The Makefile also reads `PREFIX`, `CXX`, `CXXFLAGS` and `LDFLAGS`. `make -C pocketvina print` shows its settings.
 - `make -C pocketvina install PREFIX=<prefix>` installs the engine as `<prefix>/bin/pocketvina-engine`.
 
@@ -198,8 +197,9 @@ prebuilt engine needs. Use the [conda packages](#conda-packages) or [build the e
 
 ### P2Rank does not start
 
-P2Rank needs Java 17 or later. It runs `$JAVA_HOME/bin/java` if `JAVA_HOME` is set, and `java` on `PATH`
-otherwise. Install Java with `conda install -c conda-forge "openjdk>=17"`, or load a Java module.
+P2Rank needs Java 17 to 25. It runs `$JAVA_HOME/bin/java` if `JAVA_HOME` is set, and `java` on `PATH`
+otherwise. Install Java with `conda install -c conda-forge "openjdk>=17,<26"`, or load a Java module.
+A newer Java stops P2Rank with `Unsupported class file major version`.
 `pocketvina setup p2rank --check` shows which Java a run uses.
 
 ### No internet on the compute nodes

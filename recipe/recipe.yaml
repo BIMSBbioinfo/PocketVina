@@ -8,7 +8,7 @@
 schema_version: 1
 
 context:
-  version: "0.4.4"  # = pocketvina.__version__ (tests/test_recipe.py checks it)
+  version: "0.4.5"  # = pocketvina.__version__ (tests/test_recipe.py checks it)
   # oldest Python of the noarch package's host, run and test environments (CFEP-25; conda-forge's global pinning has
   # one, this overrides it). pyproject.toml allows 3.9, but conda-forge has no Python 3.9 rdkit for the Boost the
   # engine is built with (libboost-devel below; the last Python 3.9 rdkit, 2025.03, has Boost 1.86)
@@ -28,6 +28,7 @@ source:
       - MANIFEST.in
       - README.md
       - LICENSE
+      - LICENSES/*_LICENSE
       - pocketvina/*.py
       - pocketvina/io/*.py
       - pocketvina/viewer/**
@@ -81,9 +82,13 @@ outputs:
           - pocketvina-engine --version
     about:
       summary: PocketVina-GPU docking engine (OpenCL, based on QuickVina2-GPU 2.1) used by pocketvina
-      # AutoDock Vina / QuickVina2-GPU sources (Apache-2.0), nlohmann/json (MIT), PocketVina's changes (MIT)
+      # AutoDock Vina / QuickVina2-GPU sources (Apache-2.0), nlohmann/json (MIT), PocketVina's changes (MIT); Boost
+      # is the host's libboost, linked dynamically
       license: Apache-2.0 AND MIT
-      license_file: LICENSE
+      license_file:
+        - LICENSE
+        - LICENSES/VINA_GPU_LICENSE
+        - LICENSES/NLOHMANN_JSON_LICENSE
 
   - package:
       name: pocketvina
@@ -119,7 +124,7 @@ outputs:
         - py3dmol
         - molviewspec
         # P2Rank is a Java program (downloaded by `pocketvina setup p2rank` or at the first run). P2Rank 2.5.1 runs
-        # on Java 17 to 25 (its README says 17 to 23); a newer Java may be too new for the Groovy it bundles
+        # on Java 17 to 25 (pocketvina.p2rank.JAVA_MIN, JAVA_MAX): Java 26 and later are too new for its Groovy
         - openjdk >=17,<26
         - pocketvina-engine ==${{ version }}
     tests:
@@ -143,10 +148,24 @@ outputs:
           - python -c "from pocketvina import workspace; workspace._assets('inline')"
     about:
       summary: GPU-accelerated protein-ligand docking with automated pocket detection (P2Rank), exploring through multi-pocket conditioning
+      # PocketVina (MIT); the OpenCL kernel sources in the package (QuickVina2-GPU 2.1, Apache-2.0); the Mol* bundle of
+      # the notebook viewer: Mol*, immutable and mutative (MIT), rxjs (Apache-2.0), tslib (0BSD)
+      license: MIT AND Apache-2.0 AND 0BSD
+      license_file:
+        - LICENSE
+        - LICENSES/VINA_GPU_LICENSE
+        - pocketvina/viewer/molstar-pv-5.13.1/LICENSE
+        - pocketvina/viewer/molstar-pv-5.13.1/THIRD-PARTY-LICENSES.txt
 
 about:
   homepage: https://github.com/BIMSBbioinfo/PocketVina
   repository: https://github.com/BIMSBbioinfo/PocketVina
-  license: MIT
-  license_file: LICENSE
+  # both packages together
+  license: MIT AND Apache-2.0 AND 0BSD
+  license_file:
+    - LICENSE
+    - LICENSES/VINA_GPU_LICENSE
+    - LICENSES/NLOHMANN_JSON_LICENSE
+    - pocketvina/viewer/molstar-pv-5.13.1/LICENSE
+    - pocketvina/viewer/molstar-pv-5.13.1/THIRD-PARTY-LICENSES.txt
   summary: GPU-accelerated protein-ligand docking with automated pocket detection, exploring through multi-pocket conditioning

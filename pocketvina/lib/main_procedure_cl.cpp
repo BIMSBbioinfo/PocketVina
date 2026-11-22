@@ -1,3 +1,4 @@
+// Modified by the PocketVina authors.
 #include "cache.h"
 #include "wrapcl.h"
 #include "monte_carlo.h"
@@ -7,7 +8,6 @@
 #include "parallel_mc.h"
 #include "szv_grid.h"
 #include <thread>
-#include <boost/progress.hpp>
 
 #include "commonMacros.h"
 #include "wrapcl.h"

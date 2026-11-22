@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from pocketvina import p2rank
 from test_docs import (
     EXAMPLE_LIGANDS,
     FENCE,
@@ -74,10 +75,23 @@ def test_install_is_short():
     if not INSTALLATION.is_file():
         pytest.skip("no docs/installation.md (an sdist)")
     pypi, source = _blocks("bash", INSTALLATION.read_text(encoding="utf-8"))[:2]
-    env = ['conda create -n pocketvina -c conda-forge python=3.11 "openjdk>=17" -y', "conda activate pocketvina"]
+    env = ['conda create -n pocketvina -c conda-forge python=3.11 "openjdk>=17,<26" -y', "conda activate pocketvina"]
     assert _shell_commands(pypi) == env + ["pip install pocketvina"]
     assert _shell_commands(source) == ["git clone https://github.com/BIMSBbioinfo/PocketVina", "cd PocketVina", *env,
                                        "pip install ."]
+
+
+def test_docs_give_the_java_range_p2rank_runs_on():
+    """The Java badges, install commands and texts say Java 17 to 25 (pocketvina.p2rank.JAVA_MIN, JAVA_MAX)."""
+    lo, hi = p2rank.JAVA_MIN, p2rank.JAVA_MAX
+    pages = [ROOT / "README.md", ROOT / "CONTRIBUTING.md", *sorted((ROOT / "docs").glob("*.md"))]
+    for page in pages:
+        if not page.is_file():
+            continue
+        text = page.read_text(encoding="utf-8")
+        assert set(re.findall(r'"openjdk[^"]*"', text)) <= {f'"openjdk>={lo},<{hi + 1}"'}, page.name
+        assert set(re.findall(r"badge/Java-.*?-[0-9A-Fa-f]{6}\b", text)) <= {f"badge/Java-{lo}--{hi}-007396"}, page.name
+        assert not re.search(r"Java \d+\+|Java \d+ or later", text), page.name
 
 
 def test_quick_start_uses_the_v01_config():

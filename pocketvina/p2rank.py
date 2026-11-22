@@ -16,8 +16,9 @@ complete or not at all, and processes starting at the same time (e.g. SLURM arra
 ``pocketvina setup p2rank`` does the same ahead of a run, e.g. on a login node that has internet access. Nothing is
 ever written into the package directory.
 
-P2Rank needs Java 17 or later: its launcher runs ``$JAVA_HOME/bin/java`` when ``JAVA_HOME`` is set, else ``java`` on
-``PATH``. ``check_java()`` finds that Java the same way and explains how to install one.
+P2Rank 2.5.1 needs Java 17 to 25 (Java 26 and later are too new for the Groovy it bundles): its launcher runs
+``$JAVA_HOME/bin/java`` when ``JAVA_HOME`` is set, else ``java`` on ``PATH``. ``check_java()`` finds that Java the
+same way and explains how to install one.
 
 Standard library only (tqdm draws the download progress bar when asked to).
 
@@ -43,7 +44,7 @@ from typing import Iterator, NamedTuple, Optional
 logger = logging.getLogger(__name__)
 
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
-P2RANK_VERSION = "2.5.1"
+P2RANK_VERSION = "2.5.1"  # a new version: test JAVA_MAX (below) again, with each newer Java
 P2RANK_URL = f"https://github.com/rdk/p2rank/releases/download/{P2RANK_VERSION}/p2rank_{P2RANK_VERSION}.tar.gz"
 # the release asset's sha256 (as GitHub also lists it for p2rank_2.5.1.tar.gz) and size in bytes
 P2RANK_SHA256 = "d243f2d9036ac053fefb9407b5fe1c85f4fe077c519fd975ac585e995feab274"
@@ -53,12 +54,10 @@ CACHE_NAME = f"p2rank-{P2RANK_VERSION}"  # the folder ensure_p2rank creates in t
 LEGACY_NAME = "p2rank_2.5"  # in the package directory: source installs before v0.2
 LAUNCHER = "prank"
 JAVA_MIN = 17  # P2Rank 2.5 is compiled for Java 17
+JAVA_MAX = 25  # the Groovy 4.0.28 of P2Rank 2.5.1 cannot read the class files of Java 26 and later
 DOWNLOAD_TIMEOUT_S = 60  # per connection attempt and read
 _CHUNK = 1 << 20
 _JAVA_VERSION_RE = re.compile(r'version "([^"]+)"')
-_JAVA_HELP = ('install one, e.g. `conda install -c conda-forge "openjdk>=17"`, `sudo apt-get install '
-              'openjdk-17-jre-headless` (Debian/Ubuntu) or a JDK from https://adoptium.net, and put its `java` first '
-              'on PATH or set JAVA_HOME to it')
 
 
 class P2RankError(RuntimeError):
@@ -66,7 +65,7 @@ class P2RankError(RuntimeError):
 
 
 class JavaError(RuntimeError):
-    """No Java, or one older than P2Rank needs."""
+    """No Java, or one too old or too new for P2Rank."""
 
 
 class P2RankInstall(NamedTuple):
@@ -393,21 +392,33 @@ def java_version(java: Optional[str] = None) -> Optional[int]:
     return parse_java_version(out)
 
 
+def _java_help(minimum: int) -> str:
+    """How to get a Java P2Rank runs on (its launcher takes $JAVA_HOME before PATH)."""
+    use = ("set JAVA_HOME to it" if os.environ.get("JAVA_HOME")
+           else "put its `java` first on PATH or set JAVA_HOME to it")
+    return (f'install Java {minimum} to {JAVA_MAX}, e.g. `conda install -c conda-forge "openjdk>={minimum},'
+            f'<{JAVA_MAX + 1}"`, `sudo apt-get install openjdk-{minimum}-jre-headless` (Debian/Ubuntu), a Java '
+            f'module of your cluster or a JDK from https://adoptium.net, and {use}')
+
+
 def check_java(minimum: int = JAVA_MIN) -> int:
-    """The major version of the Java P2Rank would run; ``JavaError`` saying how to get one if it is missing or older
-    than ``minimum``."""
+    """The major version of the Java P2Rank would run; ``JavaError`` saying how to get one if it is missing, older
+    than ``minimum`` or newer than ``JAVA_MAX``."""
     java = java_command()
+    java_home = os.environ.get("JAVA_HOME")
+    needs = f"P2Rank needs Java {minimum} to {JAVA_MAX}"
     if java is None:
-        java_home = os.environ.get("JAVA_HOME")
         where = (f"$JAVA_HOME is {java_home}, but {os.path.join(java_home, 'bin', 'java')} does not exist"
                  if java_home else "`java` is not on PATH")
-        raise JavaError(f"P2Rank needs Java {minimum} or later, but there is no Java ({where}): {_JAVA_HELP}")
+        raise JavaError(f"{needs}, but there is no Java ({where}): {_java_help(minimum)}")
     version = java_version(java)
     if version is None:
-        raise JavaError(f"P2Rank needs Java {minimum} or later: cannot tell the version of {java} (`{java} -version` "
-                        f"failed). If it is not a working Java, {_JAVA_HELP}")
-    if version < minimum:
-        raise JavaError(f"P2Rank needs Java {minimum} or later, but {java} is Java {version}: {_JAVA_HELP}")
+        raise JavaError(f"{needs}: cannot tell the version of {java} (`{java} -version` failed). If it is not a "
+                        f"working Java, {_java_help(minimum)}")
+    if not minimum <= version <= JAVA_MAX:
+        found = f"{java} (from {'$JAVA_HOME' if java_home else 'PATH'}) is Java {version}"
+        too = "too old" if version < minimum else "too new"
+        raise JavaError(f"{needs}, but {found}, which is {too}: {_java_help(minimum)}")
     return version
 
 

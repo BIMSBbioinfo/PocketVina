@@ -19,6 +19,7 @@
 		   The Scripps Research Institute
 
 */
+// Modified by the PocketVina authors.
 
 #include <iostream>
 #include <string>
@@ -38,7 +39,6 @@
 #include <boost/program_options.hpp>
 #include <boost/filesystem/fstream.hpp>
 #include <boost/filesystem/exception.hpp>
-#include <boost/filesystem/convenience.hpp> // filesystem::basename
 #include <boost/thread/thread.hpp> // hardware_concurrency // FIXME rm ?
 #include "parse_pdbqt.h"
 #include "parallel_mc.h"
@@ -418,8 +418,9 @@ void main_procedure(std::vector<model>& ms, const boost::optional<model>& ref, /
 		sz how_many = 0;
 		std::vector<std::string> remarks;
 		json output_json;
-		std::string receptor_basename = boost::filesystem::basename(receptor_file);
-		std::string ligand_basename = boost::filesystem::basename(out_names[ligand_count]);
+		// the file names up to their last dot (= boost::filesystem::basename, removed in Boost 1.85)
+		std::string receptor_basename = boost::filesystem::path(receptor_file).stem().string();
+		std::string ligand_basename = boost::filesystem::path(out_names[ligand_count]).stem().string();
 		std::string ligand_directory = boost::filesystem::path(out_names[ligand_count]).parent_path().string();
 		std::string output_prefix = ligand_directory + "/" + receptor_basename + "-pocket" + std::to_string(pocket_rank) + "-" + ligand_basename;
 		std::string output_pdbqt = output_prefix + ".pdbqt";
