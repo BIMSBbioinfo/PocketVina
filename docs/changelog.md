@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.6
+
+### Fixed
+
+- `Atlas.show()` over the internet shows the site's current SAS points and ChEMBL values, not older ones in the cache.
+
 ## 0.4.5
 
 ### Fixed
