@@ -1,4 +1,5 @@
 # PocketVina-GPU docking engine.
+# Modified by the PocketVina authors.
 #
 #   make                build ./PocketVina-GPU, the engine the Python package runs (pip ships it as package data)
 #   make install        copy it to $(PREFIX)/bin/pocketvina-engine and the OpenCL kernel sources it compiles at first
@@ -50,7 +51,7 @@ LIB2=-lstdc++ -lstdc++fs
 LIB3=-lm -lpthread
 LIB_PATH=-L$(BOOST_ROOT)/lib -L$(OPENCL_ROOT)/lib64 -L$(OPENCL_ROOT)/lib $(BOOST_RPATH)
 SRC=./lib/*.cpp ./OpenCL/src/wrapcl.cpp $(BOOST_THREAD_SRC)
-MACRO=$(OPENCL_VERSION) $(GPU_PLATFORM) $(DOCKING_BOX_SIZE) -DBOOST_TIMER_ENABLE_DEPRECATED #-DDISPLAY_SUCCESS -DDISPLAY_ADDITION_INFO
+MACRO=$(OPENCL_VERSION) $(GPU_PLATFORM) $(DOCKING_BOX_SIZE) #-DDISPLAY_SUCCESS -DDISPLAY_ADDITION_INFO
 COMPILE=$(CXX) -o $(ENGINE) $(CXXFLAGS) $(BOOST_INC_PATH) $(VINA_GPU_INC_PATH) $(OPENCL_INC_PATH) $(INSTALLED_INC_PATH) ./main/main.cpp
 LINK=$(SRC) $(LDFLAGS) $(LIB1) $(LIB2) $(LIB3) $(LIB_PATH) $(MACRO) $(OPTION)
 # OpenCL kernels: `make` builds an engine that loads Kernel1_Opt.bin/Kernel2_Opt.bin from opencl_binary_path and,

@@ -1557,6 +1557,10 @@ def test_predict_pockets_calls_while_running_and_kills_p2rank_on_errors(tmp_path
     pid_file, args = tmp_path / "prank.pid", tmp_path / "prank.args"
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     monkeypatch.delenv("P2RANK_HOME", raising=False)  # it would come before PATH (pocketvina.p2rank.find_p2rank)
+    # a Java P2Rank runs on, whatever Java this machine has (a too new one would stop the run before P2Rank)
+    monkeypatch.delenv("JAVA_HOME", raising=False)
+    (bin_dir / "java").write_text("#!/bin/sh\necho 'openjdk version \"17.0.8\" 2023-07-18' >&2\n")
+    (bin_dir / "java").chmod(0o755)
     structure = example_dir / "proteins" / "1fbl.pdb"
 
     def install(body):

@@ -402,6 +402,45 @@ def test_check_java(env, monkeypatch):
         p2rank.check_java()
 
 
+# what Temurin's java -version prints (Java 17, 21 and 25 run P2Rank 2.5.1; 26 and 27 stop it at once)
+JAVA_17_TO_25 = ['openjdk version "17.0.21.1" 2026-11-17', 'openjdk version "21.0.13.1" 2026-11-17 LTS',
+                 'openjdk version "25.0.5.1" 2026-11-17 LTS']
+JAVA_TOO_NEW = ['openjdk version "26.0.2.1" 2026-08-18', 'openjdk version "27.0.1.1" 2026-11-17']
+
+
+def test_check_java_range():
+    assert (p2rank.JAVA_MIN, p2rank.JAVA_MAX) == (17, 25)
+    assert [p2rank.parse_java_version(v) for v in JAVA_17_TO_25 + JAVA_TOO_NEW] == [17, 21, 25, 26, 27]
+
+
+@pytest.mark.parametrize("version_line", JAVA_17_TO_25)
+def test_check_java_accepts_java_17_to_25(env, version_line):
+    fake_java(env / "bin", version_line)
+    assert p2rank.check_java() == p2rank.parse_java_version(version_line) and p2rank.java_problem() is None
+
+
+@pytest.mark.parametrize("version_line", JAVA_TOO_NEW)
+def test_check_java_rejects_a_too_new_java(env, monkeypatch, version_line):
+    """The Groovy of P2Rank 2.5.1 cannot read Java 26 class files: the message says the range, the Java found, where
+    it comes from and what to install."""
+    major = p2rank.parse_java_version(version_line)
+    java = fake_java(env / "bin", version_line)
+    with pytest.raises(p2rank.JavaError) as e:
+        p2rank.check_java()
+    message = str(e.value)
+    assert f"P2Rank needs Java 17 to 25, but {java} (from PATH) is Java {major}, which is too new: " in message
+    assert '`conda install -c conda-forge "openjdk>=17,<26"`' in message and "first on PATH" in message
+    assert p2rank.java_problem() == message
+    # $JAVA_HOME comes first: the fix is to point it to another Java
+    monkeypatch.setenv("JAVA_HOME", str(env / "jdk"))
+    java = fake_java(env / "jdk" / "bin", version_line)
+    message = p2rank.java_problem()
+    assert f"{java} (from $JAVA_HOME) is Java {major}, which is too new" in message
+    assert message.endswith("and set JAVA_HOME to it")
+    fake_java(env / "jdk" / "bin", JAVA_17_TO_25[-1])
+    assert p2rank.check_java() == 25
+
+
 # --- the pipeline and the files format use it ----------------------------------------------------------------------
 
 def test_predict_pockets_without_p2rank_stops_the_run(env, release, monkeypatch, example_dir):
@@ -428,9 +467,63 @@ def test_predict_pockets_explains_a_missing_java(env, example_dir, monkeypatch):
     make_home(env / "p2rank")
     _exe(env / "p2rank" / "prank", "echo 'prank: line 36: java: command not found' >&2\nexit 127\n")
     monkeypatch.setenv("P2RANK_HOME", str(env / "p2rank"))
-    with pytest.raises(pipeline.RunAborted, match="exit code 127; P2Rank needs Java 17 or later") as e:
+    with pytest.raises(pipeline.RunAborted, match="exit code 127; P2Rank needs Java 17 to 25") as e:
         pipeline.predict_pockets(example_dir / "proteins" / "1fbl.pdb", env / "work")
     assert "openjdk" in str(e.value) and "command not found" in str(e.value)
+
+
+def started_p2rank(env, monkeypatch, body="exit 1") -> Path:
+    """$P2RANK_HOME = a P2Rank whose prank leaves the returned file when it starts, then runs ``body``."""
+    home = make_home(env / "p2rank")
+    started = env / "p2rank_started"
+    _exe(home / "prank", f"echo started > '{started}'\n{body}\n")
+    monkeypatch.setenv("P2RANK_HOME", str(home))
+    return started
+
+
+JAVA_OUTSIDE = [('openjdk version "11.0.2" 2019-01-15', "is Java 11, which is too old"),
+                (JAVA_TOO_NEW[-1], "is Java 27, which is too new")]
+
+
+@pytest.mark.parametrize("version_line, problem", JAVA_OUTSIDE)
+def test_predict_pockets_stops_before_p2rank_on_a_java_outside_the_range(env, example_dir, monkeypatch, version_line,
+                                                                         problem):
+    started = started_p2rank(env, monkeypatch)
+    fake_java(env / "bin", version_line)
+    with pytest.raises(pipeline.RunAborted, match=rf"^P2Rank cannot run: P2Rank needs Java 17 to 25, but .* {problem}: "
+                                                  "install Java 17 to 25"):
+        pipeline.predict_pockets(example_dir / "proteins" / "1fbl.pdb", env / "work")
+    assert not started.exists()
+    # nor is P2Rank downloaded for it
+    monkeypatch.delenv("P2RANK_HOME")
+    monkeypatch.setattr(p2rank, "P2RANK_URL", (env / "no-such-release.tar.gz").as_uri())
+    with pytest.raises(pipeline.RunAborted, match=problem):
+        pipeline.predict_pockets(example_dir / "proteins" / "1fbl.pdb", env / "work")
+    assert not os.path.exists(p2rank.cache_root())
+
+
+@pytest.mark.parametrize("version_line", [JAVA_17_TO_25[0], "no version here"])
+def test_predict_pockets_explains_unsupported_class_file_versions(env, example_dir, monkeypatch, version_line):
+    """A Java too new for P2Rank's Groovy that the check does not see (one a wrapper script picks, or one whose version
+    cannot be read, which is tried): P2Rank's error says what Java it needs."""
+    started = started_p2rank(env, monkeypatch, "echo 'Caused by: java.lang.IllegalArgumentException: Unsupported "
+                                               "class file major version 71' >&2\nexit 1")
+    fake_java(env / "bin", version_line)
+    with pytest.raises(pipeline.RunAborted, match="exit code 1; .*Java 17 to 25.*major version 71"):
+        pipeline.predict_pockets(example_dir / "proteins" / "1fbl.pdb", env / "work")
+    assert started.exists()
+
+
+@pytest.mark.parametrize("version_line, problem", JAVA_OUTSIDE)
+def test_p2rank_processor_stops_before_p2rank_on_a_java_outside_the_range(env, tmp_path, example_dir, monkeypatch,
+                                                                          caplog, version_line, problem):
+    started = started_p2rank(env, monkeypatch)
+    fake_java(env / "bin", version_line)
+    proc = P2RankProcessor(P2RankConfig(output_dir=str(tmp_path / "out")))
+    with caplog.at_level(logging.ERROR, logger="P2RankProcessor"):
+        assert not proc.run_p2rank(str(example_dir / "proteins" / "1fbl.pdb"))
+    assert problem in caplog.text and "openjdk>=17,<26" in caplog.text
+    assert not started.exists()
 
 
 def test_p2rank_processor_runs_the_p2rank_found(env, tmp_path, example_dir, monkeypatch):
@@ -458,14 +551,15 @@ def test_p2rank_processor_tries_to_install_p2rank_once(env, release, tmp_path, e
 
 
 def test_p2rank_processor_logs_why_p2rank_failed(env, tmp_path, example_dir, monkeypatch, caplog):
-    home = make_home(env / "p2rank")
-    _exe(home / "prank", "echo 'Exception in thread main java.lang.UnsupportedClassVersionError' >&2\nexit 1\n")
-    fake_java(env / "bin", 'openjdk version "11.0.2" 2019-01-15')
-    monkeypatch.setenv("P2RANK_HOME", str(home))
+    """A Java whose version cannot be read is tried: P2Rank's own error is logged, and what is wrong with the Java."""
+    started = started_p2rank(env, monkeypatch, "echo 'Exception in thread main java.lang.UnsupportedClassVersionError' "
+                                               ">&2\nexit 1")
+    fake_java(env / "bin", "no version here")
     proc = P2RankProcessor(P2RankConfig(output_dir=str(tmp_path / "out")))
     with caplog.at_level(logging.ERROR, logger="P2RankProcessor"):
         assert not proc.run_p2rank(str(example_dir / "proteins" / "1fbl.pdb"))
-    assert "UnsupportedClassVersionError" in caplog.text and "is Java 11" in caplog.text
+    assert started.exists()
+    assert "UnsupportedClassVersionError" in caplog.text and "cannot tell the version" in caplog.text
 
 
 # --- pocketvina setup p2rank ---------------------------------------------------------------------------------------
@@ -500,6 +594,18 @@ def test_setup_p2rank_dir_and_from(env, release, downloads):
     assert f"(now they use {env / 'pkg' / 'p2rank_2.5'})" in result.output
     result = invoke("--dir", env / "opt")
     assert result.exit_code == 0 and "installed already" in result.output and downloads == []
+
+
+def test_setup_p2rank_rejects_a_too_new_java(env, release, downloads):
+    fake_java(env / "bin", JAVA_TOO_NEW[-1])
+    result = invoke()
+    assert result.exit_code == cli.EXIT_USAGE and "installed" in result.output and len(downloads) == 1
+    assert "is Java 27, which is too new" in result.output and "openjdk>=17,<26" in result.output
+    result = invoke("--check")
+    assert result.exit_code == cli.EXIT_USAGE and "which is too new" in result.output and len(downloads) == 1
+    fake_java(env / "bin", JAVA_17_TO_25[-1])
+    result = invoke("--check")
+    assert result.exit_code == 0 and "Java: 25" in result.output
 
 
 def test_setup_p2rank_problems_exit_with_1(env, release, monkeypatch):

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.5
+
+### Fixed
+
+- The sdist and the wheel have the licence texts of the parts that are not PocketVina's own, in `LICENSES/`: AutoDock
+  Vina and QuickVina2-GPU-2.1 (Apache License 2.0), nlohmann/json (MIT) and Boost, which the prebuilt engine has
+  compiled in (Boost Software License 1.0).
+- The licence in the package metadata lists all licences of the package, `MIT AND Apache-2.0 AND BSL-1.0 AND 0BSD`
+  (0BSD: tslib in the Mol\* bundle), instead of only `MIT`.
+- The engine builds from source with Boost 1.85 or newer, without a patched Boost header and without the deprecated
+  Boost.Timer headers.
+- The engine source files that differ from QuickVina2-GPU-2.1 say that they were modified, as the Apache License 2.0
+  asks.
+- P2Rank 2.5.1 fails on Java 26 and later with `Unsupported class file major version`. Runs and
+  `pocketvina setup p2rank` now check for Java 17 to 25 and say how to get it, and the install commands ask for
+  `"openjdk>=17,<26"`.
+
 ## 0.4.4
 
 ### Changed

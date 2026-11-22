@@ -105,7 +105,7 @@ def test_python_output_dependencies_follow_pyproject(recipe):
         expected[CONDA_NAMES.get(name, name)] = constraint
     assert {k: v for k, v in specs.items() if k in expected} == expected
     assert set(specs) - set(expected) == {"python", "openjdk", "pocketvina-engine"}
-    assert specs["openjdk"].split(",")[0] == f">={p2rank.JAVA_MIN}"
+    assert specs["openjdk"] == f">={p2rank.JAVA_MIN},<{p2rank.JAVA_MAX + 1}"  # the Java check_java accepts
     assert specs["pocketvina-engine"] == f"=={pocketvina.__version__}"
 
     python_min = recipe["context"]["python_min"]
@@ -145,6 +145,7 @@ def test_source_filter_has_everything_the_packages_are_built_from(recipe):
         tracked += [p.relative_to(REPO_ROOT).as_posix() for p in (PACKAGE_DIR / sub).rglob("*")
                     if p.is_file() and "__pycache__" not in p.parts]
     tracked += [p.relative_to(REPO_ROOT).as_posix() for p in PACKAGE_DIR.glob("*.py")]
+    tracked += [p.relative_to(REPO_ROOT).as_posix() for p in (REPO_ROOT / "LICENSES").glob("*_LICENSE")]
     missing = [p for p in tracked if not _included(p, include)]
     assert not missing
     # what neither package is built from: the prebuilt engine, kernel binaries, Boost/P2Rank trees of older installs,
@@ -152,9 +153,31 @@ def test_source_filter_has_everything_the_packages_are_built_from(recipe):
     for path in ("pocketvina/PocketVina-GPU", "pocketvina/Kernel1_Opt.bin", "pocketvina/boost_1_77_0/boost/config.hpp",
                  "pocketvina/p2rank_2.5/prank", "pocketvina/QuickVina2-GPU-2-1/Kernel1_Opt.bin", "tests/conftest.py",
                  "benchmark/utils/x.py", "example/ligands.txt", "test/x.py",
-                 "conda-bld/noarch/pocketvina-0.4.4-pyh4616a5c_0.conda",
+                 "conda-bld/noarch/pocketvina-0.4.5-pyh4616a5c_0.conda",
                  "output/bld/rattler-build_pocketvina_h4616a5c_1/work/pocketvina/cli.py"):
         assert not _included(path, include), path
+
+
+def test_licenses(recipe):
+    """Each package names the licences of the code it holds, with their texts; the two together have every licence
+    file of the wheel (pyproject.toml's license-files) but Boost's: the conda engine links conda-forge's libboost."""
+    include = recipe["source"]["filter"]["include"]
+    engine_about = _output(recipe, "pocketvina-engine")["about"]
+    python_about = _output(recipe, "pocketvina")["about"]
+    assert engine_about["license"] == "Apache-2.0 AND MIT"
+    assert python_about["license"] == "MIT AND Apache-2.0 AND 0BSD"
+    assert recipe["about"]["license"] == "MIT AND Apache-2.0 AND 0BSD"
+    vina, json_hpp = "LICENSES/VINA_GPU_LICENSE", "LICENSES/NLOHMANN_JSON_LICENSE"
+    molstar = "pocketvina/viewer/molstar-pv-5.13.1/"
+    assert engine_about["license_file"] == ["LICENSE", vina, json_hpp]
+    assert python_about["license_file"] == ["LICENSE", vina, molstar + "LICENSE", molstar + "THIRD-PARTY-LICENSES.txt"]
+    files = recipe["about"]["license_file"]
+    assert set(files) == set(engine_about["license_file"]) | set(python_about["license_file"])
+    for name in files:
+        assert (REPO_ROOT / name).is_file() and _included(name, include), name
+    wheel = {p.relative_to(REPO_ROOT).as_posix() for pattern in _pyproject()["project"]["license-files"]
+             for p in REPO_ROOT.glob(pattern)}
+    assert wheel - set(files) == {"LICENSES/BOOST_LICENSE"}
 
 
 @needs_recipe
@@ -192,12 +215,9 @@ def _engine_sources(root: Path) -> Path:
     return root
 
 
-def _host_prefix(root: Path, boost_has_convenience: bool) -> Path:
+def _host_prefix(root: Path) -> Path:
     """$PREFIX with an installed Boost (libboost-devel) and OpenCL loader + headers (ocl-icd, opencl-headers)."""
-    fs = root / "include" / "boost" / "filesystem"
-    fs.mkdir(parents=True)
-    if boost_has_convenience:
-        (fs / "convenience.hpp").write_text("// Boost <= 1.84\n")
+    (root / "include" / "boost").mkdir(parents=True)
     (root / "include" / "CL").mkdir()
     (root / "lib").mkdir()
     for lib in ("boost_program_options", "boost_filesystem", "boost_thread", "OpenCL"):
@@ -219,10 +239,9 @@ def _fake_compiler(path: Path, log: Path) -> Path:
 
 @needs_make
 @needs_recipe
-@pytest.mark.parametrize("boost_has_convenience", [False, True], ids=["boost-1.85+", "boost-1.84"])
-def test_build_engine_script(tmp_path, boost_has_convenience):
+def test_build_engine_script(tmp_path):
     src = _engine_sources(tmp_path / "work")
-    prefix = _host_prefix(tmp_path / "host", boost_has_convenience)
+    prefix = _host_prefix(tmp_path / "host")
     log = tmp_path / "compiler.log"
     env = {k: v for k, v in os.environ.items() if k not in ("BOOST_ROOT", "BOOST_LIB_PATH", "OPENCL_ROOT",
                                                            "OPENCL_LIB_PATH", "DESTDIR", "MAKEFLAGS", "MFLAGS")}
@@ -243,15 +262,7 @@ def test_build_engine_script(tmp_path, boost_has_convenience):
     (cmd,) = log.read_text().splitlines()
     assert f"-I{prefix}/include" in cmd and f"-L{prefix}/lib" in cmd and "-lboost_thread" in cmd
     assert "-lboost_system" not in cmd and f"-Wl,-rpath,{prefix}/lib" in cmd and "libs/thread" not in cmd
-    shim = src / "boost_compat" / "boost" / "filesystem" / "convenience.hpp"
-    if boost_has_convenience:
-        assert not shim.exists() and "boost_compat" not in cmd
-    else:
-        assert cmd.startswith(f"-o PocketVina-GPU -I{src}/boost_compat -O2 ")
-        text = shim.read_text()
-        assert "inline std::string basename(const path& p) { return p.stem().string(); }" in text
-    # nothing written next to the recipe or into the checkout
-    assert not (PACKAGE_DIR / "boost_compat").exists() and not (RECIPE_DIR / "boost_compat").exists()
+    assert cmd.startswith("-o PocketVina-GPU -O2 ")  # CXXFLAGS of the compiler package only: no include folder added
 
 
 @needs_recipe

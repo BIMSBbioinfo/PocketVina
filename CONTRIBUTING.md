@@ -31,7 +31,7 @@ Install PocketVina in editable mode with the development tools (pytest, the pinn
 Meeko, which some tests use:
 
 ```bash
-conda create -n pocketvina-dev -c conda-forge python=3.11 "openjdk>=17" -y
+conda create -n pocketvina-dev -c conda-forge python=3.11 "openjdk>=17,<26" -y
 conda activate pocketvina-dev
 pip install -e ".[dev,meeko]"
 ```

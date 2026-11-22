@@ -193,8 +193,10 @@ The package and the data of the PocketVina Atlas have separate licences.
 ### PocketVina (this package)
 
 PocketVina is released under the [MIT licence](https://github.com/BIMSBbioinfo/PocketVina/blob/main/LICENSE). The
-docking engine is based on AutoDock Vina and QuickVina2-GPU-2.1 and keeps their Apache License 2.0. The notices are
-in the source files. The bundled Mol\* viewer is MIT licensed, with its licence files in
+docking engine is based on AutoDock Vina and QuickVina2-GPU-2.1 and keeps their Apache License 2.0. The notices are in
+the source files. The engine also includes nlohmann/json (MIT), and the prebuilt engine has Boost compiled in (Boost
+Software License 1.0). The licence texts of the engine's parts are in the folder `LICENSES/` of the source, and in
+`.dist-info/licenses/` of the installed package. The bundled Mol\* viewer is MIT licensed, with its licence files in
 `pocketvina/viewer/molstar-pv-5.13.1/`.
 
 ### PocketVina Atlas (the data)

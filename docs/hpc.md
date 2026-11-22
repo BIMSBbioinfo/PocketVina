@@ -11,7 +11,7 @@ Install PocketVina into an environment on a shared filesystem ([Installation](in
 login node with internet access:
 
 ```bash
-pocketvina setup p2rank          # P2Rank 2.5.1 into ~/.cache/pocketvina, and a check of Java 17+
+pocketvina setup p2rank          # P2Rank 2.5.1 into ~/.cache/pocketvina, and a check of Java 17 to 25
 ```
 
 The compute nodes then find P2Rank in your home directory. There are two alternatives:
@@ -24,8 +24,8 @@ The compute nodes then find P2Rank in your home directory. There are two alterna
 
 ### Check Java
 
-P2Rank needs Java 17 or later. If the default Java of your cluster is older, load a Java 17 module in the job script.
-You can check what a job will use:
+P2Rank needs Java 17 to 25. If the default Java of your cluster is older or newer, load a Java 17, 21 or 25 module
+in the job script. You can check what a job will use:
 
 ```bash
 pocketvina setup p2rank --check

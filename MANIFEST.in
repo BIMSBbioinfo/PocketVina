@@ -1,5 +1,7 @@
 # sdist = the wheel's files (package data in pyproject.toml) + what rebuilding the engine and the tests need
 include LICENSE README.md pyproject.toml setup.py MANIFEST.in
+# the licence texts of the code in the package that is not PocketVina's own (pyproject.toml's license-files)
+include LICENSES/*_LICENSE
 # the engine: prebuilt binary, OpenCL kernel sources, and its C++ sources (make -C pocketvina; Boost not included)
 include pocketvina/Makefile pocketvina/PocketVina-GPU
 graft pocketvina/OpenCL

@@ -4,7 +4,7 @@
 docking engine ``pocketvina/PocketVina-GPU`` is a prebuilt binary shipped as package data, with the OpenCL kernel
 sources it compiles at first use (into a per-user cache, never the package). Rebuilding the engine is explicit:
 ``make -C pocketvina`` before installing (see pocketvina/Makefile), or the conda package pocketvina-engine. P2Rank is
-downloaded at first use or by ``pocketvina setup p2rank``; Java 17+ comes from the system or conda.
+downloaded at first use or by ``pocketvina setup p2rank``; Java 17 to 25 comes from the system or conda.
 
 Since the wheel holds that binary it is not tagged ``py3-none-any`` but ``py3-none-linux_<arch>``, with the
 architecture read from the binary's ELF header: the code is pure Python, so one wheel serves every Python 3 on that

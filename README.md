@@ -12,7 +12,7 @@
   <a href="https://zenodo.org/records/15733460"><img src="https://img.shields.io/badge/Zenodo-Dataset & Raw Results-1682D4?style-for-the-badge&logo=zenodo"/></a>
   <a href="https://isocpp.org/"><img src="https://img.shields.io/badge/C++-11.4.0-00599C?style-for-the-badge&logo=cplusplus"/></a>
   <a href="https://gcc.gnu.org/"><img src="https://img.shields.io/badge/C-11.4.0-3C2179?style-for-the-badge&logo=c"/></a>
-  <a href="https://adoptium.net/"><img src="https://img.shields.io/badge/Java-17+-007396?style-for-the-badge&logo=openjdk"/></a>
+  <a href="https://adoptium.net/"><img src="https://img.shields.io/badge/Java-17--25-007396?style-for-the-badge&logo=openjdk"/></a>
   <a href="https://www.python.org/downloads/release/"><img src="https://img.shields.io/badge/Python-3.9+-3776AB?style-for-the-badge&logo=python"/></a>
   <a href="https://developer.nvidia.com/cuda-toolkit"><img src="https://img.shields.io/badge/CUDA-11.5+-76B900?style-for-the-badge&logo=nvidia"/></a>
   <a href="https://www.khronos.org/opencl/"><img src="https://img.shields.io/badge/OpenCL-3.0-4FC08D?style-for-the-badge&logo=opencl"/></a>
@@ -46,8 +46,8 @@ PocketVina finds the pockets of each protein with P2Rank and docks every ligand 
 pip install pocketvina
 ```
 
-PocketVina runs on Linux with an NVIDIA GPU and needs Java 17+ for P2Rank. Other ways to install (conda, Docker) are
-in the [documentation](https://bioinformatics.mdc-berlin.de/PocketVina/installation.html).
+PocketVina runs on Linux with an NVIDIA GPU and needs Java 17 to 25 for P2Rank. Other ways to install (conda, Docker)
+are in the [documentation](https://bioinformatics.mdc-berlin.de/PocketVina/installation.html).
 
 ## Citations
 
@@ -100,6 +100,6 @@ For questions and bug reports, open an [issue](https://github.com/BIMSBbioinfo/P
 ## License
 
 PocketVina is released under the MIT License ([LICENSE](LICENSE)). The docking engine is based on AutoDock Vina and
-QuickVina2-GPU-2.1 and keeps their Apache License 2.0. The bundled Mol\* viewer is MIT licensed. The data of the
-PocketVina Atlas has its own licence: see the
-[citing page](https://bioinformatics.mdc-berlin.de/PocketVina/citing.html#licences).
+QuickVina2-GPU-2.1 and keeps their Apache License 2.0. The licence texts of the engine's parts are in
+[LICENSES/](LICENSES). The bundled Mol\* viewer is MIT licensed. The data of the PocketVina Atlas has its own licence:
+see the [citing page](https://bioinformatics.mdc-berlin.de/PocketVina/citing.html#licences).
