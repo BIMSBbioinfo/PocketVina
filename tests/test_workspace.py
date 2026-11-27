@@ -87,6 +87,19 @@ def set_scores(results_path, pid: str, scores: dict) -> None:
     pq.write_table(table, part)
 
 
+def set_pairs(results_path, pid: str, scores: list) -> None:
+    """Rewrite a protein's pairs part to one docked pair per score (ligand_idx 0, 1, ... in that order), each with a
+    pose in pocket 1: the scores of a run of more ligands than the fixture docks, without their poses."""
+    part = Path(results_path, "tables", "pairs", f"{pid}.parquet")
+    table = pq.read_table(part).take([0] * len(scores))
+    one = [1] * len(scores)
+    for c, values in (("ligand_idx", pa.array(range(len(scores)), pa.int32())),
+                      ("vina", pa.array(scores, pa.float32())), ("best_pocket", pa.array(one, pa.int8())),
+                      ("best_mode", pa.array(one, pa.int8()))):
+        table = table.set_column(table.schema.get_field_index(c), table.schema.field(c), values)
+    pq.write_table(table, part)
+
+
 @pytest.fixture(scope="module")
 def three(real_run, tmp_path_factory):
     """Three proteins with other scores (the same poses): molecule2 -6.3 (PID), -7.1 (PID2), -5.2 (PID3); molecule5
@@ -105,18 +118,21 @@ def three(real_run, tmp_path_factory):
 
 
 def old_listing(res, pids, max_ligands, selection=None) -> dict:
-    """What workspace_data listed per protein (n, docked pockets, rows) as it computed it before it used DuckDB, with
-    every pair of the run in memory."""
+    """What workspace_data lists per protein (n, docked pockets, rows), with every pair of the run in memory (pandas)
+    instead of the DuckDB queries: ranks are the smallest rank of the pairs (proteins) with that Vina score, with how
+    many share it."""
     pairs = res.pairs(columns=["protein_id", "ligand_idx", "vina", "best_pocket", "best_mode", "ligand_efficiency"])
     pairs = pairs[(pairs["best_pocket"] >= 1) & pairs["vina"].notna()].copy()
     pairs["vina"] = short_floats(pairs["vina"])
     pairs = pairs.sort_values(["vina", "protein_id", "ligand_idx"], kind="stable")
-    pairs["protein_rank"] = pairs.groupby("ligand_idx").cumcount() + 1
+    pairs["protein_rank"] = pairs.groupby("ligand_idx")["vina"].rank(method="min").astype(int)
+    pairs["n_tied_proteins"] = pairs.groupby(["ligand_idx", "vina"])["protein_id"].transform("size")
     pairs["n_proteins"] = pairs.groupby("ligand_idx")["protein_id"].transform("size")
     out = {}
     for pid in pids:
         rows = pairs[pairs["protein_id"] == pid].reset_index(drop=True)
-        rows["rank"] = np.arange(1, len(rows) + 1)
+        rows["rank"] = rows["vina"].rank(method="min").astype(int)
+        rows["n_tied"] = rows.groupby("vina")["vina"].transform("size")
         shown = rows if max_ligands is None else rows.head(max_ligands)
         if selection is not None and selection.protein == pid and selection.ligand_idx not in set(shown["ligand_idx"]):
             shown = pd.concat([shown, rows[rows["ligand_idx"] == selection.ligand_idx]])
@@ -125,14 +141,17 @@ def old_listing(res, pids, max_ligands, selection=None) -> dict:
         with_pose = {i: sorted(int(k) for k in g["pocket"]) for i, g in ok.groupby("ligand_idx")}
         out[pid] = (len(rows), sorted({int(k) for k in runs["pocket"]}), [
             (int(r.ligand_idx), float(r.vina), int(r.best_pocket), int(r.best_mode), round(r.ligand_efficiency, 3),
-             int(r.rank), [int(r.protein_rank), int(r.n_proteins)] if r.n_proteins > 1 else None,
+             int(r.rank), int(r.n_tied) if r.n_tied > 1 else None,
+             [int(r.protein_rank), int(r.n_proteins)] if r.n_proteins > 1 else None,
+             int(r.n_tied_proteins) if r.n_proteins > 1 and r.n_tied_proteins > 1 else None,
              with_pose.get(int(r.ligand_idx), [])) for r in shown.itertuples(index=False)])
     return out
 
 
 def listing(data) -> dict:
     return {p["id"]: (p["n"], p["docked"], [(r["lig"], r["vina"], r["pocket"], r["mode"], r["le"], r["rank"],
-                                            r["across"], [k["rank"] for k in r["pockets"]]) for r in p["rows"]])
+                                            r["tie"], r["across"], r["acrossTie"],
+                                            [k["rank"] for k in r["pockets"]]) for r in p["rows"]])
             for p in data["proteins"]}
 
 
@@ -172,7 +191,7 @@ def test_data_holds_every_pose(res):
         p = pairs.loc[lid]
         assert (row["rank"], row["pocket"], row["mode"]) == (rank, int(p.best_pocket), int(p.best_mode))
         assert row["vina"] == short_floats([p.vina])[0] and row["le"] == round(float(p.ligand_efficiency), 3)
-        assert row["across"] is None  # one protein
+        assert row["tie"] is None and row["across"] is None and row["acrossTie"] is None  # no tie, one protein
         assert row["sdf"] == res.top_sdf(PID, lid)
         assert [k["rank"] for k in row["pockets"]] == [1, 2]
         for k in row["pockets"]:
@@ -194,10 +213,11 @@ def test_data_of_several_proteins_with_posebusters_only_where_checked(two):
     has one (here one protein was checked; PoseBusters is optional), None elsewhere; the ligands' identifiers."""
     data = workspace.workspace_data(two)
     assert [p["id"] for p in data["proteins"]] == [PID2, PID]  # Results.proteins(): sorted
-    across = {(p["id"], data["ligands"][str(r["lig"])]["id"]): r["across"] for p in data["proteins"] for r in p["rows"]}
-    # the same scores on both proteins: ties by protein id
-    assert across == {(PID2, "molecule2"): [1, 2], (PID, "molecule2"): [2, 2], (PID2, "molecule5"): [1, 2],
-                      (PID, "molecule5"): [2, 2]}
+    across = {(p["id"], data["ligands"][str(r["lig"])]["id"]): (r["across"], r["acrossTie"])
+              for p in data["proteins"] for r in p["rows"]}
+    # the same scores on both proteins: each ligand is tied first on both, and the page says that 2 tie
+    assert across == {(PID2, "molecule2"): ([1, 2], 2), (PID, "molecule2"): ([1, 2], 2),
+                      (PID2, "molecule5"): ([1, 2], 2), (PID, "molecule5"): ([1, 2], 2)}
     stored = two.posebusters(columns=["protein_id", "ligand_id", "pocket", "mode", "pb_status", "failed_checks"])
     checked = {(r.protein_id, r.ligand_id, int(r.pocket), int(r.mode)): r for r in stored.itertuples(index=False)}
     assert checked  # the fixture holds checks of one protein
@@ -249,11 +269,12 @@ def test_listed_pairs_as_before_without_reading_every_pair(three, monkeypatch):
     cases = [(pids, 100, None), (pids, None, None), (pids, 1, None), ([PID3], 1, sel), ([PID, PID2], 1, None),
              ([PID3, PID3], 2, None)]
     want = [old_listing(three, *case) for case in cases]
-    # ties on a protein (by ligand) and across proteins (by protein id), pairs without a pose, a selected pair beyond
-    # max_ligands
-    assert {(pid, r[0]): (r[5], r[6]) for pid, (_, _, rows) in want[0].items() for r in rows} == {
-        (PID2, 0): (1, [1, 3]), (PID, 0): (1, [2, 3]), (PID3, 0): (1, [3, 3]), (PID3, 1): (2, [1, 2]),
-        (PID, 1): (2, [2, 2])}
+    # (rank, how many tie, Across proteins, how many proteins tie): a tie on a protein (PID3 docks both ligands at
+    # the same score) and one across proteins (molecule5 on PID3 and PID), pairs without a pose, a selected pair
+    # beyond max_ligands
+    assert {(pid, r[0]): (r[5], r[6], r[7], r[8]) for pid, (_, _, rows) in want[0].items() for r in rows} == {
+        (PID2, 0): (1, None, [1, 3], None), (PID, 0): (1, None, [2, 3], None), (PID3, 0): (1, 2, [3, 3], None),
+        (PID3, 1): (1, 2, [1, 2], 2), (PID, 1): (2, None, [1, 2], 2)}
     assert [(n, len(rows)) for n, _, rows in want[0].values()] == [(1, 1), (2, 2), (2, 2)]
     assert [r[0] for r in want[3][PID3][2]] == [0, 1]
     lig = three.ligands(columns=["ligand_idx", "ligand_id", "smiles_input"]).set_index("ligand_idx")
@@ -284,6 +305,36 @@ def test_listed_pairs_of_a_protein_without_poses(three, tmp_path):
         want = old_listing(r, [PID3, PID], 1)
         assert want[PID3] == (0, [1, 2], [])
         assert listing(workspace.workspace_data(r, [PID3, PID], max_ligands=1)) == want
+
+
+def test_tied_vina_scores_share_the_smallest_rank(three, tmp_path):
+    """The engine writes one decimal, so pairs share a Vina score: tied pairs get the smallest rank of their block
+    (1, 2, 2, 2, 5) and how many tie, counted over every pair of the protein — the tied pairs beyond ``max_ligands``
+    count too. A selected pair beyond them gets the rank and the tie it has in the list."""
+    shutil.copytree(three.path, tmp_path / "results")
+    set_pairs(tmp_path / "results", PID, [-7.1, -6.3, -6.3, -6.3, -5.2])
+    with Results(tmp_path / "results") as res:
+        rows, n, _, _, _ = workspace._listed(res, [PID], None, None)
+        assert n[PID] == 5
+        assert [(int(r.rank), int(r.n_tied)) for r in rows.itertuples()] == [(1, 1), (2, 3), (2, 3), (2, 3), (5, 1)]
+        top = workspace._listed(res, [PID], 2, None)[0]
+        assert [(int(r.rank), int(r.n_tied)) for r in top.itertuples()] == [(1, 1), (2, 3)]
+        # the selected pair beyond max_ligands: a stand-in Selection, as _listed only reads its protein and ligand
+        beyond = workspace._listed(res, [PID], 2, types.SimpleNamespace(protein=PID, ligand_idx=3))[0]
+        assert [(int(r.ligand_idx), int(r.rank), int(r.n_tied)) for r in beyond.itertuples()] == [
+            (0, 1, 1), (1, 2, 3), (3, 2, 3)]
+
+
+def test_page_rows_carry_the_tie_of_each_rank(three):
+    """A page row's ties: "tie" on the protein, "acrossTie" among the proteins, None where nothing ties (such a row
+    reads as it did before ties were counted)."""
+    data = workspace.workspace_data(three, [PID3, PID])
+    shown = {(p["id"], r["lig"]): (r["rank"], r["tie"], r["across"], r["acrossTie"])
+             for p in data["proteins"] for r in p["rows"]}
+    # PID3 docks both ligands at the same score (rank 1, 2 tie); molecule5 ties with PID among the proteins
+    assert shown == {(PID3, 0): (1, 2, [3, 3], None), (PID3, 1): (1, 2, [1, 2], 2),
+                     (PID, 0): (1, None, [2, 3], None), (PID, 1): (2, None, [1, 2], 2)}
+    json.dumps(data, allow_nan=False)  # plain JSON
 
 
 @pytest.mark.parametrize("pocket, mode, initial", [
@@ -799,3 +850,34 @@ def test_page_text_says_highest_affinity():
     # spaces only: "best" before a dot or a quote is code (best.vina, view 'best'), not text
     assert not re.search(r"best\s+(poses?|modes?|scores?|vina|pockets?|drugs?|\d|\$\{)", text, re.IGNORECASE)
     assert ">Highest-affinity poses</th>" in text and "the pair's highest-affinity pose" in text
+
+
+def test_page_says_how_many_tie_and_takes_the_percentile_from_the_midrank():
+    """The page writes the tie next to a rank — "(3 tie)" in Top hits and in Selected pair, "tied 1st" and how many
+    proteins tie in Across proteins — and takes the "top x%" from the midrank, the middle of the tie block. Every
+    number of a text follows that text: the "#" cell and the Across-proteins sentence of a page of results keep
+    their raw numbers, the rank line separates thousands on both kinds of page, and an Atlas page separates
+    throughout (``intIf``); an ordinal keeps the rule for the teens ("11th", not "11st"). These are the lines that
+    write those texts; the text a browser draws from them is read by the check scripts of the item's work folder,
+    outside this suite."""
+    js = (VIEWER / "workspace.js").read_text(encoding="utf-8")
+    # the whole definition of each helper (any parameter names, any spacing), so no defect beside a quoted part can
+    # slip through: the separator switch, the ordinal with its rule for the teens and its "th" for 4 to 9, the tie
+    for name, shape in (
+            ("intIf", r"const intIf = \((\w+),\s*(\w+)\) => \(\1 == null \? '–' : \2 \? int\(\1\) : \1\);"),
+            ("ordinal", r"const ordinal = \((\w+),\s*(\w+)\s*=\s*true\) => `\$\{intIf\(\1,\s*\2\)\}"
+                        r"\$\{\1 % 100 > 10 && \1 % 100 < 14 \? 'th'"
+                        r" : \['th', 'st', 'nd', 'rd'\]\[\1 % 10\] \|\| 'th'\}`;"),
+            ("tieNote", r"const tieNote = \((\w+),\s*(\w+)\s*=\s*true\) =>"
+                        r" \(\1 > 1 \? ` \(\$\{intIf\(\1,\s*\2\)\} tie\)` : ''\);")):
+        assert re.search(shape, js), name
+    for part in ("${r.rank == null ? '–' : `${r.rank}${tieNote(r.tie, false)}`}",   # the # cell: raw numbers
+                 " · rank ${int(r.rank)}${tieNote(r.tie)} of ${int(P.n)}",          # the rank line: separated
+                 "tied ${ordinal(r.across[0], !!P.info)}", " (${intIf(tied, !!P.info)} proteins tie)",
+                 "“(N tie)” says how many share it. ",       # the note explains the form, never a value
+                 "ties = P.rows.some(r => r.tie > 1)"):      # ... and is drawn only where a listed row ties
+        assert part in js, part
+    # the midrank, whatever the spacing: the rank plus half of the rest of its block
+    assert re.search(r"r\.rank\s*\+\s*\(\s*r\.tie\s*>\s*1\s*\?\s*\(\s*r\.tie\s*-\s*1\s*\)\s*/\s*2\s*:\s*0\s*\)", js)
+    for gone in ("${r.rank}${tieNote(r.tie)}", "(${int(tied)} proteins tie)", "“(3 tie)”"):
+        assert gone not in js, gone

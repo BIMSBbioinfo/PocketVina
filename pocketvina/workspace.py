@@ -204,7 +204,8 @@ def _initial(sel: Optional[Selection], pid: str, docked: List[int]) -> dict:
             "allModes": sel.mode == "all", "show": show, "userShow": sel.pocket == "all", "tab": "pair"}
 
 
-_ROW_COLUMNS = ["protein_id", "ligand_idx", "vina", "best_pocket", "best_mode", "rank", "protein_rank", "n_proteins"]
+_ROW_COLUMNS = ["protein_id", "ligand_idx", "vina", "best_pocket", "best_mode", "rank", "n_tied", "protein_rank",
+                "n_tied_proteins", "n_proteins"]
 _DOCKED = "best_pocket >= 1 AND NOT isnan(vina)"  # a pair with a pose: the rows of best_scores()
 
 
@@ -214,8 +215,10 @@ def _listed(res: Results, pids: Sequence[str], max_ligands: Optional[int], selec
 
     ``rows`` (DataFrame, ``_ROW_COLUMNS``): per protein of ``pids`` its ``max_ligands`` best pairs and the selected one,
     in the order of ``best_scores()`` (Vina score, then ligand_idx), with ``rank`` (on the protein) and
-    ``protein_rank`` of ``n_proteins`` (the protein among the run's proteins with a pose of that ligand, best first;
-    ties by protein id). ``n``: protein -> ligands with a pose in it; ``docked``: protein -> its docked pockets;
+    ``protein_rank`` of ``n_proteins`` (the protein among the run's proteins with a pose of that ligand, best first).
+    Both ranks are smallest-first ranks over the Vina score alone: pairs or proteins with the same score share the
+    smallest rank of their block (1, 1, 1, then 4), and ``n_tied`` / ``n_tied_proteins`` say how many share it (1: no
+    tie). ``n``: protein -> ligands with a pose in it; ``docked``: protein -> its docked pockets;
     ``with_pose``: (protein, ligand_idx) -> the pockets with a pose of that pair; ``ligands``: ligand_idx ->
     (ligand_id, SMILES)."""
     import duckdb
@@ -232,6 +235,18 @@ def _listed(res: Results, pids: Sequence[str], max_ligands: Optional[int], selec
     runs, lig = parts("pocket_runs", pids), parts("ligands")
     limit = "" if max_ligands is None else f" LIMIT {int(max_ligands)}"
     con = duckdb.connect()
+
+    def ranks(where: str, worst: float) -> dict:
+        """{Vina score: (its rank on the protein, how many pairs share it)} for the scores down to ``worst``. The
+        engine writes one decimal, so hundreds of pairs can share a score: they get the smallest rank of their block
+        (1, 1, 1, then 4), counted over every pair of the protein, also those beyond ``max_ligands``."""
+        of_score, better = {}, 0
+        for score, tied in con.execute(f"SELECT vina, count(*) {where} AND vina <= ? GROUP BY vina ORDER BY vina",
+                                       [worst]).fetchall():
+            of_score[score] = (better + 1, tied)
+            better += tied
+        return of_score
+
     try:
         if runs is not None:
             for pid, k in con.execute(f"SELECT DISTINCT protein_id, pocket FROM {runs} ORDER BY protein_id, pocket"
@@ -247,7 +262,9 @@ def _listed(res: Results, pids: Sequence[str], max_ligands: Optional[int], selec
             # the best max_ligands (ORDER BY ... LIMIT keeps only those in memory), then the selected pair beyond them
             top = con.execute(f"SELECT ligand_idx, vina, best_pocket, best_mode {docked_pairs} "
                               f"ORDER BY vina, ligand_idx{limit}").df()
-            top["rank"] = np.arange(1, len(top) + 1)
+            of_score = ranks(docked_pairs, float(top["vina"].max())) if len(top) else {}
+            top["rank"] = [of_score[float(v)][0] for v in top["vina"]]
+            top["n_tied"] = [of_score[float(v)][1] for v in top["vina"]]
             top.insert(0, "protein_id", pid)
             tops.append(top)
             i = None if selection is None or selection.protein != pid else int(selection.ligand_idx)
@@ -256,8 +273,7 @@ def _listed(res: Results, pids: Sequence[str], max_ligands: Optional[int], selec
                                   ).df()
                 if len(sel):
                     vina = float(sel["vina"].iloc[0])  # a float32 score: exact as a float
-                    sel["rank"] = 1 + con.execute(f"SELECT count(*) {docked_pairs} AND (vina < ? OR vina = ? AND "
-                                                  f"ligand_idx < {i})", [vina, vina]).fetchall()[0][0]
+                    sel["rank"], sel["n_tied"] = ranks(docked_pairs, vina)[vina]  # the rank the listed pairs get
                     sel.insert(0, "protein_id", pid)
                     tops.append(sel)
         tops = [t for t in tops if len(t)]
@@ -266,11 +282,13 @@ def _listed(res: Results, pids: Sequence[str], max_ligands: Optional[int], selec
         if len(rows):
             listed = rows[["protein_id", "ligand_idx"]]
             con.register("pv_listed", listed)
-            # Across proteins: the listed ligands' pairs in every protein of the run
+            # Across proteins: the listed ligands' pairs in every protein of the run. rank(): proteins with the same
+            # score share the smallest rank of their block, and n_tied_proteins says how many share it
             across = con.execute(f"""
-                SELECT a.protein_id, a.ligand_idx, a.protein_rank, a.n_proteins FROM (
+                SELECT a.protein_id, a.ligand_idx, a.protein_rank, a.n_tied_proteins, a.n_proteins FROM (
                     SELECT protein_id, ligand_idx,
-                           row_number() OVER (PARTITION BY ligand_idx ORDER BY vina, protein_id) AS protein_rank,
+                           rank() OVER (PARTITION BY ligand_idx ORDER BY vina) AS protein_rank,
+                           count(*) OVER (PARTITION BY ligand_idx, vina) AS n_tied_proteins,
                            count(*) OVER (PARTITION BY ligand_idx) AS n_proteins
                     FROM {parts("pairs")}
                     WHERE {_DOCKED} AND ligand_idx IN (SELECT ligand_idx FROM pv_listed)) AS a
@@ -317,8 +335,9 @@ def workspace_data(res: Results, proteins: Optional[Sequence[str]] = None, *, ma
     points (``sas``, only when the results have them) and the ``max_ligands`` best ligands (best Vina score first; the
     selected one too) with their poses in every docked pocket (PDBQT, all modes), their best pose as SDF, their Vina
     score, rank, ligand efficiency and rank among the proteins; the ligands' ids, SMILES and 2D drawings; the first
-    state (``_initial``). ``proteins``: ids (None: all proteins of the results). Only the listed pairs are read
-    (``_listed``)."""
+    state (``_initial``). A rank is the smallest rank of the pairs with that Vina score, with ``tie`` /
+    ``acrossTie``: how many share it (None: no tie). ``proteins``: ids (None: all proteins of the results). Only the
+    listed pairs are read (``_listed``)."""
     from .bust import _protein_pdb
 
     pids = list(proteins) if proteins is not None else res.proteins()
@@ -341,7 +360,10 @@ def workspace_data(res: Results, proteins: Optional[Sequence[str]] = None, *, ma
             items.append({
                 "lig": i, "vina": _num(r.vina), "pocket": int(r.best_pocket), "mode": int(r.best_mode),
                 "le": _num(r.ligand_efficiency, 3), "rank": int(r.rank),
+                # the ties of each rank: how many pairs share it on the protein, how many proteins share it
+                "tie": int(r.n_tied) if r.n_tied > 1 else None,
                 "across": [int(r.protein_rank), int(r.n_proteins)] if r.n_proteins > 1 else None,
+                "acrossTie": int(r.n_tied_proteins) if r.n_proteins > 1 and r.n_tied_proteins > 1 else None,
                 "sdf": res.top_sdf(pid, i), "pockets": _pocket_poses(res, pid, i, with_pose.get((pid, i), [])),
                 "pb": checks.get((pid, i, int(r.best_pocket), int(r.best_mode)))})
         out.append({"id": pid, "name": name_part(pid), "key": f"structures/{pid}.pdb", "pdb": _protein_pdb(res, pid),

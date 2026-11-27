@@ -35,6 +35,7 @@ from pocketvina.atlas import (
     _chembl_cells,
     _fixed,
     _pb,
+    _ranks,
     _with_salt_forms,
 )
 from pocketvina.io import posefile, sas
@@ -660,6 +661,41 @@ def test_across_proteins():
     assert _across(page, "P3") == [None, 500, 2]
     assert _across(dict(page, n_targets=2), "P3") is None and _across(dict(page, n_targets=1), "P1") is None
     assert _across({"columns": []}, "P1") is None
+    # ties are NOT counted here (the drug's page holds only its best targets): proteins with the same score keep the
+    # row order and the site's "#1 of N" wording, as before. The protein page's own rank does count them (_ranks)
+    tied = {"columns": ["uniprot", "vina"], "rows": [["P2", -9.0], ["P1", -9.0]], "n_targets": 2}
+    assert _across(tied, "P2") == [1, 2] and _across(tied, "P1") == [2, 2]
+
+
+def test_ranks_of_tied_scores():
+    """``_ranks``: rows with the same Vina score share the smallest rank of their block, with how many share it, and
+    the next rank skips the block."""
+    assert _ranks([-9.4, -9.0, -9.0, -9.0, -8.1]) == [(1, 1), (2, 3), (2, 3), (2, 3), (5, 1)]
+    assert _ranks([-7.0, -7.0]) == [(1, 2), (1, 2)]
+    assert _ranks([-7.0]) == [(1, 1)] and _ranks([]) == []
+    # the protein page's rows are sorted by score; this records (does not require) what unsorted rows would give:
+    # each run keeps its order and is counted on its own
+    assert _ranks([-9.0, -8.0, -9.0]) == [(1, 1), (2, 1), (3, 1)]
+
+
+def test_protein_page_rank_of_tied_drugs(atlas, tmp_path):
+    """The drug's rank on the protein (Top hits, Selected pair): drugs with the same Vina score get the smallest rank
+    of their block and the page says how many tie; a drug nothing ties with has no tie. The fixture's ABL1 page has
+    one block of two rows, whose second row is not a Top hit: selected, it gets the rank of the first."""
+    _, drugs, hits = top_hits(atlas, ABL1)
+    scores = [row["vina"] for row in drugs]
+    assert sorted(scores.count(v) for v in set(scores)) == [1, 1, 1, 1, 1, 2]  # one tie block, of two rows
+    # the smallest rank of a score is where it first appears (the page's rows are best first)
+    want = {row["cidx"]: (scores.index(row["vina"]) + 1, scores.count(row["vina"]) or None) for row in drugs}
+    want = {cidx: (rank, tied if tied > 1 else None) for cidx, (rank, tied) in want.items()}
+    listed = atlas._page(ABL1, None)["proteins"][0]["rows"]
+    assert {r["lig"]: (r["rank"], r["tie"]) for r in listed} == {h["cidx"]: want[h["cidx"]] for h in hits}
+    assert any(tie for _, tie in want.values())  # the block is on the page
+    second = next(row for row in drugs if row["cidx"] not in {h["cidx"] for h in hits}
+                  and scores.count(row["vina"]) > 1)
+    item = payload(atlas.select(ABL1, second["pvl"]).show(path=tmp_path / "tied.html"))["proteins"][0]["rows"][-1]
+    assert (item["lig"], item["rank"], item["tie"]) == (second["cidx"], *want[second["cidx"]])
+    assert item["rank"] < drugs.index(second) + 1  # before: the row's position, which ignored the tie
 
 
 def test_show_in_a_notebook(atlas, tmp_path, monkeypatch):

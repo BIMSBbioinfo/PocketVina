@@ -47,6 +47,15 @@
   const fmt = (x, d = 1) => (x == null || Number.isNaN(Number(x)) ? '–' : Number(x).toFixed(d));     // cells.tsx
   const signed = v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1);
   const int = x => (x == null ? '–' : Number(x).toLocaleString('en-US'));
+  // a number as the text around it writes its numbers: an Atlas page separates thousands (18,713), a results page
+  // does not (its "of N docked proteins" never did), so each text stays the same throughout
+  const intIf = (n, sep) => (n == null ? '–' : sep ? int(n) : n);
+  const ordinal = (n, sep = true) => `${intIf(n, sep)}${n % 100 > 10 && n % 100 < 14 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th'}`;
+  // Vina writes one decimal, so many ligands (or proteins) share a score: they share the smallest rank of their
+  // block (1, 1, 1, then 4) and the page says how many tie (r.tie, r.acrossTie of workspace.py and atlas.py; a row
+  // with no tie reads as before, and an Atlas page has no r.acrossTie: its Across proteins line is the release's own
+  // order of the drug's targets)
+  const tieNote = (n, sep = true) => (n > 1 ? ` (${intIf(n, sep)} tie)` : '');
   const pad2 = m => String(m).padStart(2, '0');
   const byNum = (a, b) => a - b;
   // a link of the data (Atlas pages) in a new tab; text only for anything but an http(s) address
@@ -432,7 +441,9 @@
       const key = `top:${S.prot.id}`;
       if (body.__pv !== key) {
         body.__pv = key;
-        const P = S.prot, listed = P.rows.filter(r => D.maxLigands == null || r.rank <= D.maxLigands).length, cols = P.topColumns || [];
+        const P = S.prot, cols = P.topColumns || [];
+        // the rows after the first max_ligands are a selected pair, not part of the list (a rank cannot count them: tied rows share one)
+        const listed = D.maxLigands == null ? P.rows.length : Math.min(P.rows.length, D.maxLigands), ties = P.rows.some(r => r.tie > 1);
         body.innerHTML = `<div role="tabpanel" aria-label="Top hits"><p class="pv-note">${P.topNote != null ? esc(P.topNote)
           : `Ligands docked into ${esc(protName(P))}, highest affinity (lowest Vina score) first. Pick one to see its poses.`}</p>`
           + `<input type="search" class="pv-search" id="pv-q" placeholder="Search ligands (name or SMILES)" aria-label="Search ligands" value="${esc(S.q)}">`
@@ -441,12 +452,13 @@
           + `<th class="r">Mode</th><th class="r" title="Ligand efficiency: −Vina / heavy atoms">LE</th></tr></thead>`
           + `<tbody id="pv-rows"></tbody></table></div>`
           + (P.topNote == null && P.n > listed ? `<p class="pv-note">The top ${int(listed)} of ${int(P.n)} ligands docked into ${esc(protName(P))} (max_ligands=${int(D.maxLigands)}).</p>` : '')
-          + `<p class="pv-note">Vina: highest affinity of the pair (its lowest AutoDock Vina score over all pockets and modes, kcal/mol; more negative is better). Pocket and mode of that pose. LE: ligand efficiency.</p></div>`;
+          + `<p class="pv-note">${ties ? `#: rank by Vina score; ${P.info ? 'drugs' : 'ligands'} with the same score share the smallest rank of their block, and “(N tie)” says how many share it. ` : ''}`
+          + `Vina: highest affinity of the pair (its lowest AutoDock Vina score over all pockets and modes, kcal/mol; more negative is better). Pocket and mode of that pose. LE: ligand efficiency.</p></div>`;
       }
       const t = S.q.trim().toLowerCase();
       const text = L => `${L.id} ${L.smiles}` + (L.ids ? ` ${L.ids.map(x => x.value).join(' ')}` : '');   // Atlas pages: also the identifiers
       const rows = S.prot.rows.filter(r => !t || text(ligOf(r)).toLowerCase().includes(t)), cols = S.prot.topColumns || [];
-      set($('pv-rows'), rows.length ? rows.map(r => `<tr data-act="row" data-v="${r.lig}" data-active="${S.row === r}"><td class="r num mut">${r.rank == null ? '–' : r.rank}</td>`
+      set($('pv-rows'), rows.length ? rows.map(r => `<tr data-act="row" data-v="${r.lig}" data-active="${S.row === r}"><td class="r num mut">${r.rank == null ? '–' : `${r.rank}${tieNote(r.tie, false)}`}</td>`
         + `<td class="trunc"><span class="link" title="${esc(ligOf(r).id)}">${esc(ligOf(r).id)}</span></td><td class="r num">${fmt(r.vina)}</td>`
         + `<td><span style="display:inline-flex;align-items:center;gap:6px" class="mut"><i class="dot"></i>${r.pocket}</span></td>`
         + cols.map((_, i) => valueCell(r.topValues && r.topValues[i])).join('') + `<td class="r num">${r.mode}</td>`
@@ -465,7 +477,8 @@
     const r = S.row, P = S.prot;
     if (!r) return `<div role="tabpanel" aria-label="Selected pair"><p class="mut">Pick a ligand in Top hits to see its poses in each pocket.</p></div>`;
     const L = ligOf(r), cur = pocketOf(r, S.pk), modes = cur ? cur.modes : [], m = modes[S.mode - 1];
-    const pct = Math.max(1, Math.round(100 * r.rank / P.n));
+    // the percentile from the middle of the tie block (the midrank): the smallest rank would flatter every tied row
+    const pct = Math.max(1, Math.round(100 * (r.rank + (r.tie > 1 ? (r.tie - 1) / 2 : 0)) / P.n));
     const pockets = P.docked.map(k => {
       const pk = pocketOf(r, k), v = pk ? bestIn(pk) : null, bad = v != null && v >= 0, best = k === r.pocket, on = S.view === 'modes' ? S.pk === k : best;
       const tip = (best ? 'Pocket with the highest-affinity pose. ' : '') + (!pk ? `Pocket ${k}: no pose of this ligand` : bad
@@ -480,14 +493,18 @@
     const modeText = S.view === 'best' ? `mode ${S.mode} · highest affinity` : `mode ${S.mode}/${modes.length}`;
     const note = S.view === 'modes' && m ? `${fmt(m[0])} kcal/mol${m[0] >= 0 ? ' (no favourable pose)' : ''} · RMSD to mode 1: ${fmt(m[1], 2)}–${fmt(m[2], 2)} Å`
       : `pocket ${r.pocket} · the pair's highest-affinity pose`;
-    // an Atlas page (P.info) in the site's words: "drugs on", "compound", and a line when the protein is outside the drug's best targets
+    // an Atlas page (P.info) in the site's words: "drugs on", "compound", and a line when the protein is outside the drug's best targets.
+    // Proteins with the same score share a rank: the protein "is tied 1st", and the sentence ends with how many tie
+    const tied = r.across && r.across[0] != null && r.acrossTie > 1 ? r.acrossTie : 0;
+    const place = !r.across ? '' : tied ? `tied ${ordinal(r.across[0], !!P.info)}` : `#${r.across[0]}`;
     const across = r.across ? `<dt>Across proteins</dt><dd>${esc(protName(P))} is ${r.across[0] == null ? `not among the top ${int(r.across[2])} of ${int(r.across[1])}`
-      : `#${r.across[0]} of ${P.info ? int(r.across[1]) : r.across[1]}`} docked proteins for this ${P.info ? 'compound' : 'ligand'}</dd>` : '';
+      : `${place} of ${P.info ? int(r.across[1]) : r.across[1]}`} docked proteins for this ${P.info ? 'compound' : 'ligand'}`
+      + `${tied ? ` (${intIf(tied, !!P.info)} proteins tie)` : ''}</dd>` : '';
     return `<div role="tabpanel" aria-label="Selected pair"><div class="pv-drug" data-pair-drug><div class="pv-svg">${L.svg ? `<img alt="2D structure of ${esc(L.id)}" src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(L.svg)}">` : ''}</div>`
       + `<div style="min-width:0"><h3>${esc(L.id)}</h3>`
       + `<p class="small mut">Docked with PocketVina into ${P.docked.length} pocket${P.docked.length === 1 ? '' : 's'} of ${esc(protName(P))}</p></div></div>`
       + identifiers(L)
-      + `<dl class="kv" data-pair-score><dt>Highest affinity (Vina, kcal/mol)</dt><dd class="num">${fmt(r.vina)} kcal/mol${r.rank == null ? '' : ` · rank ${int(r.rank)} of ${int(P.n)}${P.info ? ' drugs' : ''} on ${esc(protName(P))} (top ${pct}%)`}</dd>`
+      + `<dl class="kv" data-pair-score><dt>Highest affinity (Vina, kcal/mol)</dt><dd class="num">${fmt(r.vina)} kcal/mol${r.rank == null ? '' : ` · rank ${int(r.rank)}${tieNote(r.tie)} of ${int(P.n)}${P.info ? ' drugs' : ''} on ${esc(protName(P))} (top ${pct}%)`}</dd>`
       + `${across}<dt>Ligand efficiency</dt><dd class="num">${fmt(r.le, 2)}</dd><dt>Highest-affinity pose</dt><dd>pocket ${r.pocket}, mode ${r.mode}</dd>${posebusters(r.pb)}</dl>`
       + `<h4>Highest affinity in each pocket</h4><div class="pv-pk-grid" role="group" aria-label="Pocket">${pockets}</div>`
       + `<div class="pv-modes" data-pair-modes><button type="button" class="btn" data-act="step" data-v="-1" aria-label="Previous mode"${S.mode <= 1 ? ' disabled' : ''}>${ICON.left}</button>`

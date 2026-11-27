@@ -39,6 +39,13 @@ On an Atlas page the texts name the protein by its gene (`info.title`) and use t
 ABL1", "for this compound"). There `rows[].across` can also be `[null, n, top]`: the protein is not among the drug's
 `top` best targets, and Selected pair says so.
 
+Both kinds of page carry `rows[].tie`, and a page of docking results also `rows[].acrossTie`: how many pairs (drugs)
+share the row's rank on the protein, and how many proteins share its rank among them (Vina writes one decimal, so a
+score is often shared). The page writes them next to the rank, "(3 tie)" and "tied 1st … (479 proteins tie)", and
+takes the "top x%" from the middle of the tie block. An Atlas page has no `acrossTie`: its *Across proteins* line
+numbers the drug's best targets as the release lists them, and reads as it did before. Where a field is null or
+missing — a rank nothing ties with — the rank reads as it did before as well.
+
 Licences:
 
 - Mol\* is MIT licensed: `molstar-pv-5.13.1/LICENSE`.

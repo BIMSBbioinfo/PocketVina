@@ -35,6 +35,7 @@ import zlib
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from itertools import groupby
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
 import pandas as pd
@@ -1283,14 +1284,16 @@ class Atlas:
         PoseBusters result, its drug's identifiers and the site's two ChEMBL values (``topValues``: "ChEMBL Strict"
         and, when the release has chembl_any/, "ChEMBL Complete"; the protein's ``topColumns`` names them). As on the
         site, ``rank`` and ``n`` count the protein's rows of drugs (a row docked as something else than a drug, or a
-        catalogue number's own run, has no rank). The rows' poses (``pose_records``: two rounds of reads), their drug
-        pages, the structure, the SAS points and the ChEMBL records are fetched at the same time (``PAGE_THREADS``)."""
+        catalogue number's own run, has no rank), and drugs with the same Vina score share the smallest rank of their
+        block, with ``tie``: how many share it (``_ranks``). The rows' poses (``pose_records``: two rounds of reads),
+        their drug pages, the structure, the SAS points and the ChEMBL records are fetched at the same time
+        (``PAGE_THREADS``)."""
         from .workspace import _initial, _page_sas, ligand_svg
 
         data = self._protein_json(uniprot)
         rows = [dict(zip(data["columns"], r)) for r in data["rows"]]  # best first
         drugs = [row for row in rows if not int(row["flags"] or 0) & NON_DRUG]
-        rank_of = {row["cidx"]: n for n, row in enumerate(drugs, 1)}
+        rank_of = dict(zip((row["cidx"] for row in drugs), _ranks([row["vina"] for row in drugs])))
         hits = [row for row in drugs if _int(row["pb"]) == 0]
         listed = list(hits[:max_ligands] if max_ligands is not None else hits)
         if pair is not None and all(row["cidx"] != pair.row["cidx"] for row in listed):
@@ -1336,8 +1339,10 @@ class Atlas:
                 if modes:
                     pockets.append({"rank": k, "pdbqt": _text(block),
                                     "modes": [[_num(m.affinity), _num(m.rmsd_lb), _num(m.rmsd_ub)] for m in modes]})
+            rank, tied = rank_of.get(row["cidx"], (None, None))
             items.append({"lig": int(row["cidx"]), "vina": _num(row["vina"]), "pocket": int(row["pocket"]),
-                          "mode": int(row["mode"]), "le": _num(row["le"], 3), "rank": rank_of.get(row["cidx"]),
+                          "mode": int(row["mode"]), "le": _num(row["le"], 3), "rank": rank,
+                          "tie": tied if tied and tied > 1 else None,  # how many drugs share the rank
                           # as on the site, not for an entry's own run (the drug page ranks the drug's runs)
                           "across": across if row["cidx"] in canonical else None,
                           "sdf": _text(top) if top else None, "pockets": pockets, "pb": _pb(row, checks, statuses),
@@ -1646,10 +1651,24 @@ def _pb(row: dict, checks: List[str], statuses: List[str]) -> Optional[dict]:
             "failed": failed}
 
 
+def _ranks(scores: List) -> List[Tuple[int, int]]:
+    """Per score, in the order of the page's rows (best first), (its rank, how many rows share it): rows with the
+    same Vina score get the smallest rank of their block (1, 2, 2, 2, then 5), as the page of a results directory
+    does (``workspace.py``). The engine writes one decimal, so a score is shared by many rows. A score that the rows
+    do not keep together (they are sorted, as ``proteins/<UniProt>.json`` and ``best_scores`` have them) counts as
+    the rows come: each run of it gets the rank of where that run starts, and its own count."""
+    out: List[Tuple[int, int]] = []
+    for _, same in groupby(scores):  # the rows come sorted by score, as the page lists them
+        tied = len(list(same))
+        out += [(len(out) + 1, tied)] * tied
+    return out
+
+
 def _across(compound: dict, uniprot: str) -> Optional[list]:
     """[rank of the protein among the drug's docked proteins (best first), their number] from the drug's page
     (compounds/<PVL>.json: its best targets); [None, their number, the number of best targets] if the protein is not
-    among them (the page then says so, as the site does)."""
+    among them (the page then says so, as the site does). The drug's page holds only its best targets, so ties are
+    not counted here: the sentence keeps the site's "#1 of N" wording."""
     columns = {name: i for i, name in enumerate(compound.get("columns") or [])}
     if "uniprot" not in columns or "vina" not in columns:
         return None
