@@ -57,6 +57,8 @@ p { margin: 0; }
 .pv-head label { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--mut); }
 .pv-head select { min-height: 32px; border: 1px solid var(--line); border-radius: 2px; background: var(--bg); padding: 0 8px; font-size: 14px; }
 .pv-head .pv-title { font-size: 14px; color: var(--mut); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.pv-feedback { font-size: 14px; color: var(--mut); text-decoration: none; white-space: nowrap; }
+.pv-feedback:hover, .pv-feedback:focus-visible { text-decoration: underline; }
 .pv-main { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; flex: 1; min-height: 0; }
 .pv-left { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .pv-viewer { position: relative; flex: 1; min-height: 260px; overflow: hidden; border: 1px solid var(--line); border-radius: 4px; background: var(--sec); }

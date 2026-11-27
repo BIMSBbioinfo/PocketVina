@@ -2,11 +2,18 @@
 
 ## 0.4.7
 
+### Added
+
+- A *Feedback* link in the top bar of the page of `Results.show()` and `Atlas.show()`, and in the README and the
+  documentation: the form to write to when a protein is missing or something looks wrong. The Atlas website links to
+  the same form. It is a plain link that opens in a new tab, so the page stays one self-contained file.
+
 ### Fixed
 
 - A rank in the page of `Results.show()` and `Atlas.show()` no longer breaks a tie by ligand or protein id: pairs
   with the same Vina score get the same rank, the smallest of their block, and the page says how many tie
-  (*rank 1 (3 tie) of 18,713*). The *top x%* of a pair comes from the middle of its block. On a page of docking
+  (*rank 1 (3 tie) of 18,713*). The *top x%* of a pair comes from the middle of its block. The rank in the *#*
+  column of *Top hits* separates thousands like the rank line below it (*12,345 (1,234 tie)*). On a page of docking
   results the *Across proteins* line counts the tie too (*tied 1st of 18713 docked proteins … (479 proteins tie)*);
   on an Atlas page it keeps its wording, because the drug's page holds only its best targets.
 
