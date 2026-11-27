@@ -42,6 +42,10 @@
   };
   // P2Rank's SAS points in the legend: the colour scale viewer.js draws (score 0 green to 0.7 red, linear in RGB; the site's round 14r)
   const SAS_SWATCH = ['#00FF00', '#55AA00', '#AA5500', '#FF0000'];
+  // Where a reader writes when a protein is missing or something is wrong: the same form the Atlas site links to.
+  // A plain link in a new tab, never an embedded form — the page is one self-contained file that opens offline, and
+  // in a notebook it runs inside a sandboxed iframe (workspace.py SANDBOX allows popups for links like this one).
+  const FEEDBACK_URL = 'https://forms.gle/e3ovm1N9jzoCRU576';
   const root = document.getElementById('pv-root');
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const fmt = (x, d = 1) => (x == null || Number.isNaN(Number(x)) ? '–' : Number(x).toFixed(d));     // cells.tsx
@@ -332,6 +336,7 @@
   function setStatus(t) { S.status = t; const el = $('pv-status'); if (el) el.textContent = t; }
   function layout() {
     root.innerHTML = `<header class="pv-head"><span class="pv-brand">PocketVina</span><span id="pv-proteins"></span><span class="pv-title" id="pv-title"></span>`
+      + `<a class="pv-feedback" href="${FEEDBACK_URL}" target="_blank" rel="noopener noreferrer">Feedback</a>`
       + `<button type="button" class="btn" data-act="theme" id="pv-theme"></button></header>`
       + (D.proteins.some(p => p.info) ? `<div class="pv-info" id="pv-info"></div>` : '')
       + `<div class="pv-main"><div class="pv-left"><div class="pv-viewer" id="pv-viewer"><span class="pv-status" id="pv-status" role="status"></span>`

@@ -883,3 +883,20 @@ def test_page_says_how_many_tie_and_takes_the_percentile_from_the_midrank():
     # the page kind, and the note never quotes a tie of its own
     for gone in ("${r.rank}${", "(${int(tied)} proteins tie)", "“(3 tie)”"):
         assert gone not in js, gone
+
+
+def test_page_links_to_the_feedback_form_in_a_new_tab():
+    """The page's top bar carries one "Feedback" link to the form the Atlas site links to as well, opened in a new
+    tab. It must stay a plain link: an embedded form would phone out and would not work in a notebook, where the page
+    is served in a sandboxed iframe (``workspace.SANDBOX``). README and the docs name the same form, so a changed
+    URL cannot leave one of them behind."""
+    url = "https://forms.gle/e3ovm1N9jzoCRU576"
+    js = (VIEWER / "workspace.js").read_text(encoding="utf-8")
+    assert f"const FEEDBACK_URL = '{url}';" in js
+    assert ('<a class="pv-feedback" href="${FEEDBACK_URL}" target="_blank" rel="noopener noreferrer">Feedback</a>'
+            in js)
+    assert "<iframe" not in js and "forms.gle" not in js.replace(url, "")   # the link only, never an embedded form
+    assert "allow-popups" in workspace.SANDBOX                              # or the new tab is blocked in a notebook
+    root = Path(workspace.__file__).resolve().parent.parent
+    for doc in ("README.md", "docs/index.md"):
+        assert url in (root / doc).read_text(encoding="utf-8"), doc

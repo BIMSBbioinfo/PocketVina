@@ -32,7 +32,8 @@ in the
 [Colab notebook](https://colab.research.google.com/github/BIMSBbioinfo/PocketVina/blob/main/notebooks/quickstart_colab.ipynb)
 on a free GPU. The [PocketVina Atlas](atlas.md) is a database of docking results of drugs against the human
 proteome, computed with PocketVina; you can search it from Python, no GPU needed. To cite PocketVina and the tools
-it builds on, see [Citing and acknowledgements](citing.md).
+it builds on, see [Citing and acknowledgements](citing.md). If a protein you expected is missing, or something looks
+wrong, tell us in the [feedback form](https://forms.gle/e3ovm1N9jzoCRU576).
 
 ```{toctree}
 :maxdepth: 2

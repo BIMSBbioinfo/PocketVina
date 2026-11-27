@@ -95,7 +95,9 @@ sphinx-build docs docs/_build/html
 ## Contact
 
 For questions and bug reports, open an [issue](https://github.com/BIMSBbioinfo/PocketVina/issues) or start a
-[discussion](https://github.com/BIMSBbioinfo/PocketVina/discussions).
+[discussion](https://github.com/BIMSBbioinfo/PocketVina/discussions). If a protein you expected is missing, or
+something in the results or the Atlas looks wrong, tell us in the
+[feedback form](https://forms.gle/e3ovm1N9jzoCRU576).
 
 ## License
 

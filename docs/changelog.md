@@ -2,6 +2,12 @@
 
 ## 0.4.7
 
+### Added
+
+- A *Feedback* link in the top bar of the page of `Results.show()` and `Atlas.show()`, and in the README and the
+  documentation: the form to write to when a protein is missing or something looks wrong. The Atlas website links to
+  the same form. It is a plain link that opens in a new tab, so the page stays one self-contained file.
+
 ### Fixed
 
 - A rank in the page of `Results.show()` and `Atlas.show()` no longer breaks a tie by ligand or protein id: pairs
