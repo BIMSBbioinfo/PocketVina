@@ -47,8 +47,9 @@
   const fmt = (x, d = 1) => (x == null || Number.isNaN(Number(x)) ? '–' : Number(x).toFixed(d));     // cells.tsx
   const signed = v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1);
   const int = x => (x == null ? '–' : Number(x).toLocaleString('en-US'));
-  // a number as the text around it writes its numbers: an Atlas page separates thousands (18,713), a results page
-  // does not (its "of N docked proteins" never did), so each text stays the same throughout
+  // a number as the text around it writes its numbers, so each text stays the same throughout: a rank and its tie
+  // separate thousands wherever a rank is shown (the "#" cell, the rank line), while the Across-proteins sentence
+  // follows across[1], which only an Atlas page separates (its "of N docked proteins" never did)
   const intIf = (n, sep) => (n == null ? '–' : sep ? int(n) : n);
   const ordinal = (n, sep = true) => `${intIf(n, sep)}${n % 100 > 10 && n % 100 < 14 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th'}`;
   // Vina writes one decimal, so many ligands (or proteins) share a score: they share the smallest rank of their
@@ -458,7 +459,7 @@
       const t = S.q.trim().toLowerCase();
       const text = L => `${L.id} ${L.smiles}` + (L.ids ? ` ${L.ids.map(x => x.value).join(' ')}` : '');   // Atlas pages: also the identifiers
       const rows = S.prot.rows.filter(r => !t || text(ligOf(r)).toLowerCase().includes(t)), cols = S.prot.topColumns || [];
-      set($('pv-rows'), rows.length ? rows.map(r => `<tr data-act="row" data-v="${r.lig}" data-active="${S.row === r}"><td class="r num mut">${r.rank == null ? '–' : `${r.rank}${tieNote(r.tie, false)}`}</td>`
+      set($('pv-rows'), rows.length ? rows.map(r => `<tr data-act="row" data-v="${r.lig}" data-active="${S.row === r}"><td class="r num mut">${r.rank == null ? '–' : `${int(r.rank)}${tieNote(r.tie)}`}</td>`
         + `<td class="trunc"><span class="link" title="${esc(ligOf(r).id)}">${esc(ligOf(r).id)}</span></td><td class="r num">${fmt(r.vina)}</td>`
         + `<td><span style="display:inline-flex;align-items:center;gap:6px" class="mut"><i class="dot"></i>${r.pocket}</span></td>`
         + cols.map((_, i) => valueCell(r.topValues && r.topValues[i])).join('') + `<td class="r num">${r.mode}</td>`

@@ -855,11 +855,11 @@ def test_page_text_says_highest_affinity():
 def test_page_says_how_many_tie_and_takes_the_percentile_from_the_midrank():
     """The page writes the tie next to a rank — "(3 tie)" in Top hits and in Selected pair, "tied 1st" and how many
     proteins tie in Across proteins — and takes the "top x%" from the midrank, the middle of the tie block. Every
-    number of a text follows that text: the "#" cell and the Across-proteins sentence of a page of results keep
-    their raw numbers, the rank line separates thousands on both kinds of page, and an Atlas page separates
-    throughout (``intIf``); an ordinal keeps the rule for the teens ("11th", not "11st"). These are the lines that
-    write those texts; the text a browser draws from them is read by the check scripts of the item's work folder,
-    outside this suite."""
+    number of a text follows that text: a rank and its tie separate thousands wherever a rank is shown (the "#"
+    cell, the rank line) on both kinds of page, while the Across-proteins sentence follows ``across[1]``, which only
+    an Atlas page separates (``intIf``); an ordinal keeps the rule for the teens ("11th", not "11st"). These are the
+    lines that write those texts; the text a browser draws from them is read by the check scripts of the item's work
+    folder, outside this suite."""
     js = (VIEWER / "workspace.js").read_text(encoding="utf-8")
     # the whole definition of each helper (any parameter names, any spacing), so no defect beside a quoted part can
     # slip through: the separator switch, the ordinal with its rule for the teens and its "th" for 4 to 9, the tie
@@ -871,13 +871,15 @@ def test_page_says_how_many_tie_and_takes_the_percentile_from_the_midrank():
             ("tieNote", r"const tieNote = \((\w+),\s*(\w+)\s*=\s*true\) =>"
                         r" \(\1 > 1 \? ` \(\$\{intIf\(\1,\s*\2\)\} tie\)` : ''\);")):
         assert re.search(shape, js), name
-    for part in ("${r.rank == null ? '–' : `${r.rank}${tieNote(r.tie, false)}`}",   # the # cell: raw numbers
-                 " · rank ${int(r.rank)}${tieNote(r.tie)} of ${int(P.n)}",          # the rank line: separated
+    for part in ("${r.rank == null ? '–' : `${int(r.rank)}${tieNote(r.tie)}`}",     # the # cell: separated
+                 " · rank ${int(r.rank)}${tieNote(r.tie)} of ${int(P.n)}",          # the rank line: the same
                  "tied ${ordinal(r.across[0], !!P.info)}", " (${intIf(tied, !!P.info)} proteins tie)",
                  "“(N tie)” says how many share it. ",       # the note explains the form, never a value
                  "ties = P.rows.some(r => r.tie > 1)"):      # ... and is drawn only where a listed row ties
         assert part in js, part
     # the midrank, whatever the spacing: the rank plus half of the rest of its block
     assert re.search(r"r\.rank\s*\+\s*\(\s*r\.tie\s*>\s*1\s*\?\s*\(\s*r\.tie\s*-\s*1\s*\)\s*/\s*2\s*:\s*0\s*\)", js)
-    for gone in ("${r.rank}${tieNote(r.tie)}", "(${int(tied)} proteins tie)", "“(3 tie)”"):
+    # a rank is never written raw beside its tie (the "#" cell did that until 0.4.7), the Across tie never ignores
+    # the page kind, and the note never quotes a tie of its own
+    for gone in ("${r.rank}${", "(${int(tied)} proteins tie)", "“(3 tie)”"):
         assert gone not in js, gone
