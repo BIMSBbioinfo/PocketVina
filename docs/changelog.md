@@ -1,5 +1,12 @@
 # Changelog
 
+## Not released yet
+
+### Fixed
+
+- `pockets_dir` in a `--config` TOML file for `pocketvina dock` is now resolved relative to the config file's folder
+  like the other path options, and non-string values are rejected with a config error.
+
 ## 0.4.7
 
 ### Added

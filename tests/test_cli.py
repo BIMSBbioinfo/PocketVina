@@ -386,6 +386,27 @@ def test_dock_config_file(tmp_path, example_dir, fake_engine_env, stubs):
     assert result.exit_code == cli.EXIT_USAGE and "not valid TOML" in result.output, result.output
 
 
+@needs_toml
+def test_dock_config_file_pockets_dir(tmp_path, example_dir, monkeypatch):
+    """pockets_dir in --config is resolved relative to the TOML file's folder and rejects non-string values."""
+    plist, smiles = inputs(tmp_path, example_dir)
+    pockets = plist.parent / "pockets"
+    pockets.mkdir()
+    run_toml = plist.parent / "run.toml"
+    run_toml.write_text(f'proteins = "{plist.name}"\nligands = "{smiles.name}"\nout = "../results"\n'
+                        'pockets_dir = "pockets"\n')
+    seen = []
+    monkeypatch.setattr(pipeline, "run_atlas", lambda pv, force=False: seen.append(pv.config))
+    monkeypatch.chdir(tmp_path)
+    result = invoke("dock", "--config", run_toml)
+    assert result.exit_code == cli.EXIT_NOTHING and seen[-1].pockets_dir == str(pockets), result.output
+
+    run_toml.write_text(f'proteins = "{plist.name}"\nligands = "{smiles.name}"\nout = "../results"\n'
+                        'pockets_dir = 5\n')
+    result = invoke("dock", "--config", run_toml)
+    assert result.exit_code == cli.EXIT_USAGE and "not a valid value" in result.output, result.output
+
+
 def test_dock_ctrl_c_exits_with_130(tmp_path, example_dir, monkeypatch):
     """Ctrl-C: "Aborted!" and exit code 130 (not 1, a usage error), and the protein list written for a folder of
     structures is removed."""

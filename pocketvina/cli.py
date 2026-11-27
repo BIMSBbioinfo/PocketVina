@@ -69,7 +69,7 @@ EXIT_ABORTED = 130  # Ctrl-C
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"  # as PocketVinaGPU's
 RANDOM_SEED = "random"
 # dock options that are paths: relative ones in a --config file are relative to the file's folder
-PATH_OPTIONS = ("proteins", "database_path", "protein_list", "ligands", "out", "tmp_dir")
+PATH_OPTIONS = ("proteins", "database_path", "protein_list", "ligands", "pockets_dir", "out", "tmp_dir")
 # --config keys that name an option by its PocketVinaConfig field
 CONFIG_ALIASES = {"protein_paths": "proteins", "smiles_file": "ligands", "output_dir": "out",
                   "output_format": "format", "vram_per_proc_mib": "vram_per_proc"}
